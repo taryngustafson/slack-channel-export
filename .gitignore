@@ -1,0 +1,22 @@
+# ── Exported Slack content: ignored, to prevent accidental commits. ─────────
+# These files contain private Slack conversations. A repo is exactly the wrong
+# place for them, and this is the single most important line in this file.
+exports/
+# The raw archive, by name, in case one ever ends up outside exports/.
+*.raw.json
+
+# Credentials — the token lives in Keychain, but belt and braces.
+.env
+*token*
+!tools/check_token.sh
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Half-written files from an interrupted atomic write.
+*.partial

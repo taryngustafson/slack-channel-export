@@ -1,0 +1,27 @@
+#!/bin/sh
+# Wrapper so the exporter can be run from anywhere, without activating the venv
+# or remembering the path to the Python interpreter.
+#
+#   ~/slack-channel-export/slack-export C0123456789
+#   slack-export C0123456789            (after install.sh)
+#
+# install.sh puts a symlink to this file on your PATH, and a symlink's own folder
+# is not the project - so follow the link back to the real file first. Otherwise
+# the venv and the scripts would be looked for next to the link.
+SELF=$0
+while [ -L "$SELF" ]; do
+    LINK=$(readlink "$SELF")
+    case $LINK in
+        /*) SELF=$LINK ;;
+         *) SELF=$(dirname "$SELF")/$LINK ;;
+    esac
+done
+DIR=$(cd "$(dirname "$SELF")" && pwd)
+
+if [ ! -x "$DIR/.venv/bin/python" ]; then
+    echo "FATAL: $DIR/.venv is missing - the tool is not installed there." >&2
+    echo "       Run 'sh install.sh' inside $DIR, or see README.md." >&2
+    exit 1
+fi
+
+exec "$DIR/.venv/bin/python" "$DIR/tools/export_conversation.py" "$@"

@@ -1,0 +1,72 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# slack-channel-export — personal, read-only, manually-run Slack archiver.
+#
+# WHAT THIS IS
+#   A config for a Slack app that issues ONE user token (xoxp-) used by a local
+#   CLI script. The script is run by hand, exports one named conversation, writes
+#   a file, and exits. It is not a bot. Nothing runs in the background.
+#
+# WHAT THE TOKEN CAN REACH  (stated plainly, not minimised)
+#   - every PUBLIC channel in the workspace, including ones never joined
+#   - every PRIVATE channel of which the installing user is a member
+#   - all of that user's DMs and group DMs
+#   - thread replies in all of the above
+#   - basic profile info for workspace members (names — NOT emails; that would
+#     require users:read.email, which is deliberately absent)
+#
+#   This is the same reach the person already has by scrolling Slack. It is not
+#   broader than the account. It IS broad. Treat the resulting token like a
+#   password: it cannot speak, but it can read a great deal.
+#
+# WHAT THE TOKEN CANNOT DO
+#   No write scope of any kind is requested, so calls to chat.postMessage,
+#   reactions.add, files.upload, conversations.invite, conversations.rename,
+#   users.profile.set etc. are refused by Slack with `missing_scope`.
+#   No files:read either — attachments export as links, not content.
+#
+# HOW THIS IS ENFORCED  (precise version)
+#   A token's abilities are fixed by the scopes approved at authorization time.
+#   This app config can be edited later, but Slack requires RE-AUTHORIZATION
+#   before any added scope takes effect — an already-issued token never silently
+#   gains powers. Revoking is one click in the app's settings.
+#
+# NOT PRESENT, ON PURPOSE
+#   no features:            -> no bot user, no slash commands, no app home
+#   no scopes.bot:          -> no bot token is ever issued; no second identity
+#   no event_subscriptions: -> Slack never pushes anything; there is no listener
+#   socket_mode_enabled: false -> no persistent connection
+#
+# DEPLOYMENT INTENT  (not expressible in this file — see note)
+#   Intended for internal single-workspace use only; do not enable distribution.
+#   Slack currently gives internal customer-built apps Tier 3 limits for
+#   conversations.history and conversations.replies (50+ requests/minute).
+# ─────────────────────────────────────────────────────────────────────────────
+
+display_information:
+  name: slack-channel-export
+  description: Read-only local exporter for one selected Slack channel or DM at a time, including thread replies. No bot or write access.
+  background_color: "#3d3d3d"
+
+oauth_config:
+  scopes:
+    user:
+      - channels:history    # messages in public channels
+      - channels:read       # resolve a public channel ID -> its name
+      - groups:history      # messages in private channels I'm a member of
+      - groups:read         # resolve a private channel ID -> its name
+      - im:history          # my DMs
+      - im:read             # find the conversation ID for a DM with a person
+      - mpim:history        # group DMs
+      - mpim:read           # find the conversation ID for a group DM
+      - users:read          # resolve U0123456789 -> a human name
+
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  # Rotation would expire the access token every 12h and require implementing an
+  # OAuth refresh exchange. Deferred deliberately: this is a hand-run local tool
+  # with the token in Keychain. Without rotation the access token is long-lived
+  # until revoked, and manual revocation/reinstallation remains available if the
+  # token needs to be invalidated. Revisit if the token ever lives anywhere but
+  # this laptop.
+  token_rotation_enabled: false
