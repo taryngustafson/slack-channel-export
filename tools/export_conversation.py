@@ -25,6 +25,12 @@ conversation named on the command line - it never enumerates the workspace.
     slack-export D0123456789 --no-clipboard
     slack-export C0123456789 --out ~/Desktop        # put the .md and .txt there
     slack-export C0123456789                        # again later: append what is new
+
+Saved conversations, so an ID can be found again without going back to Slack:
+
+    slack-export list                   # each ID and its Slack channel name
+    slack-export list -n                # ...plus your nicknames
+    slack-export list planning          # only those with this in an ID or a name
 """
 
 import argparse
@@ -41,6 +47,7 @@ from slack_sdk.errors import SlackApiError
 from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 
 # Same directory as this script, so a plain import works when run as a script.
+import channel_directory
 import incremental
 import render_markdown
 import render_text
@@ -73,6 +80,13 @@ NAME_MAX = 60
 # with --out belongs to the user and its permissions are left exactly as they are.
 PRIVATE_FILE = 0o600
 PRIVATE_DIR = 0o700
+
+# The remembered ID <-> name pairs. State about the user and their workspaces, not
+# output, so it lives with the user's settings rather than in exports/ - where it
+# would split in two under --out and vanish with the project folder. Outside the
+# project, so git never sees it; save_directory still checks, for the people who
+# keep ~/.config itself in a dotfiles repository.
+DIRECTORY_PATH = Path.home() / ".config" / "slack-export" / "channels.json"
 
 
 def keychain_token(service: str = "SLACK_USER_TOKEN") -> str:
@@ -279,6 +293,48 @@ def load_archive(path: Path):
     except (json.JSONDecodeError, OSError) as exc:
         sys.exit(f"FATAL: {display_path(path)} is unreadable ({exc}).\n"
                  f"       Move it aside to start this conversation over.")
+
+
+def load_directory(path: Path = None) -> dict:
+    """Read the saved channel names, or an empty store if none have been saved.
+
+    The path defaults to DIRECTORY_PATH looked up at call time, not at import, so
+    tests can point it at a temporary file.
+
+    Damaged is fatal, for the same reason as load_archive: starting over quietly
+    would discard every name that was saved.
+    """
+    path = path or DIRECTORY_PATH
+    if not path.exists():
+        return channel_directory.empty()
+    try:
+        return channel_directory.validate(json.loads(path.read_text()))
+    except (json.JSONDecodeError, OSError, ValueError) as exc:
+        sys.exit(f"FATAL: {display_path(path)} is unreadable ({exc}).\n"
+                 f"       Fix it by hand, or move it aside to start the saved "
+                 f"names over.")
+
+
+def save_directory(data: dict, path: Path = None) -> None:
+    """Write the saved channel names, owner-only, never where git could commit them.
+
+    Uses committable_paths directly rather than refuse_if_committable, whose advice
+    (use --out) is about exports and would be wrong here.
+    """
+    path = path or DIRECTORY_PATH
+    try:
+        exposed = committable_paths([path])
+    except GitCheckFailed as exc:
+        sys.exit(f"FATAL: could not check whether {display_path(path)} is ignored "
+                 f"by git.\n       git said: {exc}")
+    if exposed:
+        sys.exit(f"FATAL: refusing to save channel names to {display_path(path)}:\n"
+                 f"       it is inside a git repository that does not ignore it, so "
+                 f"real channel\n"
+                 f"       names and IDs could be committed. Add it to that "
+                 f"repository's .gitignore.")
+    make_private_dir(path.parent)
+    write_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
 def swap_header(existing: str, new_header: str, marker: str):
@@ -531,14 +587,75 @@ def flag_broadcast_duplicates(messages: list) -> int:
     return flagged
 
 
+def list_command(argv) -> None:
+    """`slack-export list [-n] [search ...]`: print saved IDs and names. Offline.
+
+    Filter, sort and format are separate steps in channel_directory, so a later
+    --sort or extra column is a new flag here and a table entry there.
+    """
+    parser = argparse.ArgumentParser(
+        prog="slack-export list",
+        # Line breaks written out, since RawDescriptionHelpFormatter keeps them as
+        # they are - it is what lets the paragraphs stay separate.
+        description="Print every saved conversation, one per line: its ID and its\n"
+                    "Slack channel name, sorted by Slack channel name.\n\n"
+                    "A 1:1 DM has no Slack channel name, so it shows the name of its\n"
+                    "most recent export instead, marked (from export) - a name that\n"
+                    "did not come from Slack. A group DM nobody has named shows as\n"
+                    "[unnamed group DM]. A '-' marks an empty column.\n\n"
+                    "Reads only the saved list - never the Keychain or Slack.",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("-n", "--nicknames", action="store_true",
+                        help="add a third column: your nickname, or else the most "
+                             "recent export name, marked (from export), when it "
+                             "differs from the Slack channel name")
+    # Every word is joined, like an export's name, so quotes are optional.
+    parser.add_argument("search", nargs="*",
+                        help="show only conversations whose ID, Slack channel "
+                             "name, or nickname contains this - ignoring case, "
+                             "spaces and punctuation. Searching always adds the "
+                             "nickname column, so you can see why each line "
+                             "matched")
+    args = parser.parse_args(argv)
+    term = " ".join(args.search)
+
+    store = load_directory()
+    rows = channel_directory.search(store, term)
+    if not rows:
+        if channel_directory.search(store):
+            # Exit 1 on no match, as grep does, so a script can tell.
+            sys.exit(f"No saved conversation matches '{term}'.")
+        print("No saved conversations yet.")
+        return
+    columns = (channel_directory.WITH_NICKNAMES if args.nicknames or term
+               else channel_directory.DEFAULT_COLUMNS)
+    for line in channel_directory.format_rows(channel_directory.sort_rows(rows),
+                                              columns):
+        print(line)
+
+
+# Words that, as the first argument, run something other than an export. A
+# conversation ID can never be one of them: parse_conversation_id accepts only
+# ID-shaped text and Slack links.
+COMMANDS = {
+    "list": list_command,
+}
+
+
 def main() -> None:
+    argv = sys.argv[1:]
+    if argv and argv[0] in COMMANDS:
+        COMMANDS[argv[0]](argv[1:])
+        return
+
     parser = argparse.ArgumentParser(
         prog="slack-export", description=__doc__,
         # Spelled out rather than left to argparse, which lists the flags first.
         # What someone needs to type first is the conversation, so that comes
         # first; the flags are optional and can go in any order after it.
         usage="slack-export conversation_id [name ...] "
-              "[--out DIR] [--no-threads] [--no-clipboard]",
+              "[--out DIR] [--no-threads] [--no-clipboard]\n"
+              "       slack-export list [-n] [search ...]",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     # No default, and nargs is not '?' - the target is REQUIRED. This tool never
     # enumerates the workspace or guesses what to export.
