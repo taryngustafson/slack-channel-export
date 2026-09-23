@@ -15,6 +15,10 @@ none ever overwrites another:
   exports     - the file names it has been exported under, each with the time of
                 its most recent export. One conversation can have several.
 
+Each entry also records its kind - public or private channel, DM, or group DM -
+from Slack's own answer, never from the ID: a group DM's ID starts with C, like a
+channel's.
+
 Conversation IDs are unique only within one workspace, so entries are grouped by
 the workspace's team ID - the one auth.test returns - never by its name, which an
 admin can change. With one saved token today there is one workspace in the store;
@@ -29,6 +33,7 @@ a second token later adds a second group, not a new layout.
             "C0123456789": {
               "nickname": "Project Planning",
               "slack_name": "project-planning",
+              "kind": "private_channel",
               "exports": {
                 "Project-Planning": {"last_export_utc": "2026-09-22T18:00:00Z"}
               }
@@ -78,7 +83,7 @@ def validate(data) -> dict:
             where = f"{channel_id} in workspace {team_id}"
             if not isinstance(entry, dict):
                 raise ValueError(f"{where} is not an object")
-            for field in ("nickname", "slack_name"):
+            for field in ("nickname", "slack_name", "kind"):
                 if field in entry and not isinstance(entry[field], str):
                     raise ValueError(f"{where} has a {field} that is not text")
             exports = entry.get("exports", {})
@@ -99,16 +104,48 @@ def _entry(data: dict, team_id: str, team_name: str, channel_id: str) -> dict:
     return workspace["channels"].setdefault(channel_id, {})
 
 
+class NicknameTaken(ValueError):
+    """The nickname already belongs to another conversation in the same workspace."""
+
+    def __init__(self, nickname: str, owner_id: str, owner: dict):
+        super().__init__(f"the nickname '{nickname}' is already used by {owner_id}")
+        self.owner_id = owner_id
+        self.owner = owner
+
+
+def nickname_owner(data: dict, team_id: str, nickname: str):
+    """The (ID, entry) already holding `nickname` in this workspace, or None.
+
+    Compared the way search compares, so "Project Planning" and "project-planning"
+    count as the same nickname: two that differ only in case or punctuation could
+    never be told apart when typed back in.
+    """
+    wanted = _words(nickname)
+    workspace = data["workspaces"].get(team_id, {"channels": {}})
+    for channel_id, entry in workspace["channels"].items():
+        if entry.get("nickname") and _words(entry["nickname"]) == wanted:
+            return channel_id, entry
+    return None
+
+
 def set_nickname(data: dict, team_id: str, team_name: str, channel_id: str,
                  nickname: str) -> str:
     """Give `channel_id` the user's own name for it. Changes `data` in place.
 
     Returns "added" (no nickname before), "changed", or "unchanged", so the caller
     can say what happened.
+
+    A nickname means one conversation per workspace, so that it can later stand in
+    for the ID. Raises NicknameTaken, changing nothing, if another conversation in
+    the workspace already has it. Conversations in different workspaces may share
+    one, as their IDs are separate too.
     """
     nickname = nickname.strip()
     if not nickname:
         raise ValueError("a nickname cannot be empty")
+    owner = nickname_owner(data, team_id, nickname)
+    if owner and owner[0] != channel_id:
+        raise NicknameTaken(nickname, *owner)
     entry = _entry(data, team_id, team_name, channel_id)
     before = entry.get("nickname")
     entry["nickname"] = nickname
@@ -123,6 +160,38 @@ def set_slack_name(data: dict, team_id: str, team_name: str, channel_id: str,
     entry = _entry(data, team_id, team_name, channel_id)
     if slack_name and slack_name.strip():
         entry["slack_name"] = slack_name.strip()
+
+
+# What kind of conversation an entry is, as stored and as shown to a person.
+KINDS = {
+    "public_channel": "public channel",
+    "private_channel": "private channel",
+    "dm": "DM",
+    "group_dm": "group DM",
+}
+
+
+def kind_of(info: dict) -> str:
+    """The kind of conversation, from Slack's conversations.info answer.
+
+    Order matters: Slack also marks a group DM as private, so group DM is tested
+    before private channel.
+    """
+    if info.get("is_im"):
+        return "dm"
+    if info.get("is_mpim"):
+        return "group_dm"
+    if info.get("is_private"):
+        return "private_channel"
+    return "public_channel"
+
+
+def set_kind(data: dict, team_id: str, team_name: str, channel_id: str,
+             kind: str) -> None:
+    """Record what kind of conversation `channel_id` is."""
+    if kind not in KINDS:
+        raise ValueError(f"unknown kind {kind!r}")
+    _entry(data, team_id, team_name, channel_id)["kind"] = kind
 
 
 def record_export(data: dict, team_id: str, team_name: str, channel_id: str,
@@ -179,6 +248,7 @@ def search(data: dict, term: str = "") -> list:
                    "channel_id": channel_id,
                    "nickname": entry.get("nickname", ""),
                    "slack_name": entry.get("slack_name", ""),
+                   "kind": entry.get("kind", ""),
                    "export_names": sorted(exports),
                    "latest_export_name": _latest_export(exports),
                    "last_export_utc": max(times, default="")}
@@ -198,6 +268,9 @@ UNNAMED_GROUP_DM = "[unnamed group DM]"
 # Marks a name taken from an export file rather than from Slack or the user.
 FROM_EXPORT = " (from export)"
 
+# Marks the user's nickname standing in for a Slack name that does not exist.
+FROM_NICKNAME = " (nickname)"
+
 
 def _export_fallback(row: dict) -> str:
     """The most recent export name, marked, or "" if never exported.
@@ -213,11 +286,17 @@ def shown_slack_name(row: dict) -> str:
     """The Slack channel name as list prints it.
 
     A 1:1 DM has no Slack name at all, so without a fallback it would be a bare ID.
-    It shows its most recent export name instead, marked "(from export)".
+    It shows the user's nickname instead, marked "(nickname)", or failing that its
+    most recent export name, marked "(from export)". The nickname comes first
+    because the user chose it; an export name is only whatever the file was called.
     """
     if row["slack_name"].startswith(UNNAMED_GROUP_DM_PREFIX):
         return UNNAMED_GROUP_DM
-    return row["slack_name"] or _export_fallback(row)
+    if row["slack_name"]:
+        return row["slack_name"]
+    if row["nickname"]:
+        return row["nickname"] + FROM_NICKNAME
+    return _export_fallback(row)
 
 
 def shown_nickname(row: dict) -> str:
@@ -225,14 +304,15 @@ def shown_nickname(row: dict) -> str:
     that only repeats what the Slack channel name column already shows.
 
     It repeats it when there is no Slack name (the first column already fell back
-    to the same export name), or when the export name and the Slack name are the
-    same words. The NAMES are compared, not the displayed text, which would always
-    differ by the marker.
+    to the nickname or the export name), or when the export name and the Slack
+    name are the same words. The NAMES are compared, not the displayed text, which
+    would always differ by the marker.
     """
+    if not row["slack_name"]:
+        return ""
     if row["nickname"]:
         return row["nickname"]
-    if not row["slack_name"] or (_words(row["latest_export_name"])
-                                 == _words(row["slack_name"])):
+    if _words(row["latest_export_name"]) == _words(row["slack_name"]):
         return ""
     return _export_fallback(row)
 

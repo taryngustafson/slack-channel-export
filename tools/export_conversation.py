@@ -28,6 +28,8 @@ conversation named on the command line - it never enumerates the workspace.
 
 Saved conversations, so an ID can be found again without going back to Slack:
 
+    slack-export save C0123456789                   # remember it
+    slack-export save C0123456789 Planning Team     # ...with your own nickname
     slack-export list                   # each ID and its Slack channel name
     slack-export list -n                # ...plus your nicknames
     slack-export list planning          # only those with this in an ID or a name
@@ -455,8 +457,12 @@ def _self_test() -> None:
     assert swap_header("no rule here at all", "NEW", "===") is None
 
 
-def assert_read_only(client: WebClient) -> list:
+def assert_read_only(client: WebClient, quiet: bool = False):
     """Refuse to run unless Slack reports the token's scopes, all in ALLOWED_SCOPES.
+
+    Returns the granted scopes and Slack's auth.test response, which also says
+    whose token it is and which workspace - the team ID that keys saved names.
+    `quiet` skips the identity lines; a refusal is always printed.
 
     A token that Slack rejects - revoked, expired, mistyped - is an ordinary thing
     to hit, not a bug, so it gets the same one-line FATAL treatment as every other
@@ -485,10 +491,11 @@ def assert_read_only(client: WebClient) -> list:
                  f"       Only the read scopes in slack-export-app-manifest.yaml "
                  f"are allowed.")
 
-    print(f"  identity   : {response['user']} ({response['user_id']}) "
-          f"on {response['team']}")
-    print(f"  scopes     : {len(granted)} granted, all read-only")
-    return granted, response["url"]
+    if not quiet:
+        print(f"  identity   : {response['user']} ({response['user_id']}) "
+              f"on {response['team']}")
+        print(f"  scopes     : {len(granted)} granted, all read-only")
+    return granted, response
 
 
 def fetch_history(client: WebClient, conversation_id: str) -> list:
@@ -587,6 +594,30 @@ def flag_broadcast_duplicates(messages: list) -> int:
     return flagged
 
 
+def connect() -> WebClient:
+    """A Slack client using the Keychain token, retrying politely on HTTP 429."""
+    client = WebClient(token=keychain_token())
+    client.retry_handlers.append(RateLimitErrorRetryHandler(max_retry_count=3))
+    return client
+
+
+def require_conversation_id(raw) -> str:
+    """The conversation ID in what was typed, or exit explaining what one looks like.
+
+    Runs before the Keychain is read or Slack is called, so a typo costs nothing.
+    """
+    conversation_id = parse_conversation_id(raw)
+    if conversation_id is None:
+        sys.exit(
+            f"FATAL: '{raw}' is not a Slack conversation ID.\n"
+            f"       Expected C0123456789 (a channel), D0123456789 (a DM), or a "
+            f"Slack link\n"
+            f"       such as https://example.slack.com/archives/C0123456789\n"
+            f"       In Slack: click the channel name -> About -> Channel ID, at "
+            f"the bottom.")
+    return conversation_id
+
+
 def list_command(argv) -> None:
     """`slack-export list [-n] [search ...]`: print saved IDs and names. Offline.
 
@@ -599,9 +630,10 @@ def list_command(argv) -> None:
         # they are - it is what lets the paragraphs stay separate.
         description="Print every saved conversation, one per line: its ID and its\n"
                     "Slack channel name, sorted by Slack channel name.\n\n"
-                    "A 1:1 DM has no Slack channel name, so it shows the name of its\n"
-                    "most recent export instead, marked (from export) - a name that\n"
-                    "did not come from Slack. A group DM nobody has named shows as\n"
+                    "A 1:1 DM has no Slack channel name, so it shows your nickname\n"
+                    "for it instead, marked (nickname), or failing that the name of\n"
+                    "its most recent export, marked (from export) - names that did\n"
+                    "not come from Slack. A group DM nobody has named shows as\n"
                     "[unnamed group DM]. A '-' marks an empty column.\n\n"
                     "Reads only the saved list - never the Keychain or Slack.",
         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -634,11 +666,88 @@ def list_command(argv) -> None:
         print(line)
 
 
+def save_command(argv) -> None:
+    """`slack-export save <ID> [nickname ...]`: remember a conversation.
+
+    Asks Slack which workspace the token belongs to (auth.test, which is also the
+    read-only check) and what the conversation is (conversations.info), so the
+    entry is keyed correctly and the ID is known to exist before it is saved.
+    """
+    parser = argparse.ArgumentParser(
+        prog="slack-export save",
+        description="Save a conversation so `slack-export list` can find its ID "
+                    "again. Records its Slack channel name and kind, and your "
+                    "nickname for it if you give one. Saving again refreshes the "
+                    "Slack channel name; a nickname is only changed by giving a "
+                    "new one. Contacts Slack, read-only.")
+    parser.add_argument("conversation_id",
+                        help="Slack conversation ID - C... (channel) or D... (DM) "
+                             "- or a Slack link containing one")
+    # Every leftover word is the nickname, so quotes are optional, as for an export.
+    parser.add_argument("nickname", nargs="*",
+                        help="your own name for it (optional); must not already "
+                             "belong to another saved conversation")
+    args = parser.parse_args(argv)
+    conversation_id = require_conversation_id(args.conversation_id)
+    nickname = " ".join(args.nickname).strip()
+
+    # Read before Slack is contacted: a damaged store should cost nothing.
+    store = load_directory()
+    client = connect()
+    _, auth = assert_read_only(client, quiet=True)
+    team_id, team_name = auth["team_id"], auth["team"]
+
+    try:
+        info = client.conversations_info(channel=conversation_id)["channel"]
+    except SlackApiError as exc:
+        error = exc.response["error"]
+        hint = ("\n       Check the ID, and that you are a member of it in "
+                "this workspace." if error == "channel_not_found" else "")
+        sys.exit(f"FATAL: Slack could not find {conversation_id} ({error}).{hint}")
+
+    kind = channel_directory.kind_of(info)
+    if nickname:
+        try:
+            outcome = channel_directory.set_nickname(store, team_id, team_name,
+                                                     conversation_id, nickname)
+        except channel_directory.NicknameTaken as exc:
+            owner = exc.owner.get("slack_name") or "no Slack channel name"
+            sys.exit(f"FATAL: the nickname '{nickname}' is already used by "
+                     f"{exc.owner_id} ({owner}).\n"
+                     f"       Pick another, or give that one a different "
+                     f"nickname first.")
+    channel_directory.set_slack_name(store, team_id, team_name, conversation_id,
+                                     info.get("name") or "")
+    channel_directory.set_kind(store, team_id, team_name, conversation_id, kind)
+    save_directory(store)
+
+    row = next(r for r in channel_directory.search(store, conversation_id)
+               if r["team_id"] == team_id and r["channel_id"] == conversation_id)
+    shown = channel_directory.shown_slack_name(row) or channel_directory.BLANK
+    print(f"{conversation_id}  {shown}  ({channel_directory.KINDS[kind]})")
+    if row["nickname"]:
+        print(f"  nickname: {row['nickname']}  "
+              f"({outcome if nickname else 'unchanged'})")
+    elif not row["slack_name"]:
+        # Slack gives it no name, so only a nickname identifies it for good. Said
+        # outright when an export name is standing in, which could otherwise be
+        # read as a nickname just saved.
+        if channel_directory.shown_slack_name(row):
+            print(f"  No nickname yet. To give it one:  "
+                  f"slack-export save {conversation_id} <nickname>")
+        else:
+            print(f"  It has no Slack channel name, so `slack-export list` will "
+                  f"show '{channel_directory.BLANK}'.\n"
+                  f"  Give it a nickname to find it later:\n"
+                  f"    slack-export save {conversation_id} <nickname>")
+
+
 # Words that, as the first argument, run something other than an export. A
 # conversation ID can never be one of them: parse_conversation_id accepts only
 # ID-shaped text and Slack links.
 COMMANDS = {
     "list": list_command,
+    "save": save_command,
 }
 
 
@@ -655,6 +764,7 @@ def main() -> None:
         # first; the flags are optional and can go in any order after it.
         usage="slack-export conversation_id [name ...] "
               "[--out DIR] [--no-threads] [--no-clipboard]\n"
+              "       slack-export save conversation_id [nickname ...]\n"
               "       slack-export list [-n] [search ...]",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     # No default, and nargs is not '?' - the target is REQUIRED. This tool never
@@ -684,16 +794,7 @@ def main() -> None:
     incremental._self_test()
 
     # Before anything else: is that actually a conversation ID?
-    conversation_id = parse_conversation_id(args.conversation_id)
-    if conversation_id is None:
-        sys.exit(
-            f"FATAL: '{args.conversation_id}' is not a Slack conversation ID.\n"
-            f"       Expected C0123456789 (a channel), D0123456789 (a DM), or a "
-            f"Slack link\n"
-            f"       such as https://example.slack.com/archives/C0123456789\n"
-            f"       In Slack: click the channel name -> About -> Channel ID, at "
-            f"the bottom.")
-    args.conversation_id = conversation_id
+    args.conversation_id = require_conversation_id(args.conversation_id)
     # Resolved up front: a bad path should fail now, not after the fetch.
     out_dir = resolve_out_dir(args.out)
 
@@ -721,14 +822,13 @@ def main() -> None:
             f"       asked: {args.conversation_id}\n"
             f"       Pick another name, or move the existing files aside.")
 
-    client = WebClient(token=keychain_token())
-    # Back off and retry automatically if Slack returns HTTP 429.
-    client.retry_handlers.append(RateLimitErrorRetryHandler(max_retry_count=3))
+    client = connect()
 
     print("=" * 63)
     print(" PRE-FLIGHT")
     print("=" * 63)
-    granted, info_url = assert_read_only(client)
+    granted, auth = assert_read_only(client)
+    info_url = auth["url"]
 
     print()
     print("=" * 63)

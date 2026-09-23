@@ -105,6 +105,39 @@ class NameTests(unittest.TestCase):
         self.assertEqual(self.entry(team=TEAM)["nickname"], "Here")
         self.assertEqual(self.entry(team=OTHER_TEAM)["nickname"], "There")
 
+    def test_a_nickname_already_used_elsewhere_is_refused_and_nothing_changes(self):
+        self.nickname("Planning Team", channel=CHAN)
+        before = json.dumps(self.store, sort_keys=True)
+        for clash in ("Planning Team", "planning-team", "  PLANNING team "):
+            with self.subTest(clash=clash), \
+                    self.assertRaises(cd.NicknameTaken) as caught:
+                self.nickname(clash, channel=OTHER_CHAN)
+            self.assertEqual(caught.exception.owner_id, CHAN)
+        self.assertEqual(json.dumps(self.store, sort_keys=True), before)
+
+    def test_re_saving_its_own_nickname_is_fine(self):
+        self.nickname("Planning Team")
+        self.assertEqual(self.nickname("planning team"), "changed")
+
+    def test_other_workspaces_may_reuse_a_nickname(self):
+        self.nickname("Planning Team", team=TEAM)
+        self.assertEqual(self.nickname("Planning Team", team=OTHER_TEAM), "added")
+
+    def test_kind_comes_from_slack_not_from_the_id(self):
+        for info, kind in (({"is_im": True}, "dm"),
+                           # Slack marks group DMs private too.
+                           ({"is_mpim": True, "is_private": True}, "group_dm"),
+                           ({"is_private": True}, "private_channel"),
+                           ({}, "public_channel")):
+            with self.subTest(kind=kind):
+                self.assertEqual(cd.kind_of(info), kind)
+
+    def test_set_kind_stores_it_and_refuses_unknown(self):
+        cd.set_kind(self.store, TEAM, "Example", CHAN, "group_dm")
+        self.assertEqual(self.entry()["kind"], "group_dm")
+        with self.assertRaises(ValueError):
+            cd.set_kind(self.store, TEAM, "Example", CHAN, "guess")
+
     def test_workspace_name_follows_the_latest_report(self):
         self.nickname("x")
         cd.set_nickname(self.store, TEAM, "Renamed Workspace", OTHER_CHAN, "y")
@@ -159,7 +192,7 @@ class SearchTests(unittest.TestCase):
         row = cd.search(self.store, "lab")[0]
         self.assertEqual(row, {"team_id": TEAM, "team_name": "Example",
                                "channel_id": OTHER_CHAN, "nickname": "",
-                               "slack_name": "lab-notes",
+                               "slack_name": "lab-notes", "kind": "",
                                "export_names": ["Bench-Log", "Bench-Log-2"],
                                "latest_export_name": "Bench-Log-2",
                                "last_export_utc": LATER})
@@ -170,7 +203,7 @@ class SearchTests(unittest.TestCase):
 
 def row(channel_id, slack_name="", nickname="", latest_export=""):
     return {"team_id": TEAM, "team_name": "Example", "channel_id": channel_id,
-            "nickname": nickname, "slack_name": slack_name,
+            "nickname": nickname, "slack_name": slack_name, "kind": "",
             "export_names": [latest_export] if latest_export else [],
             "latest_export_name": latest_export, "last_export_utc": ""}
 
@@ -216,9 +249,21 @@ class SortAndFormatTests(unittest.TestCase):
 
     def test_blank_cells_print_a_placeholder(self):
         lines = cd.format_rows([row(CHAN, "project-planning"),
-                                row("D0000000003", "", "Alex")], cd.WITH_NICKNAMES)
+                                row(OTHER_CHAN, "chan", "Mine")], cd.WITH_NICKNAMES)
         self.assertEqual(lines, [f"{CHAN}  project-planning  -",
-                                 "D0000000003  -                 Alex"])
+                                 f"{OTHER_CHAN}  chan              Mine"])
+
+    def test_no_slack_name_falls_back_to_marked_nickname(self):
+        # The nickname beats an export name: the user chose it.
+        lines = cd.format_rows([row("D0000000003", "", "Alex"),
+                                row("D0000000004", "", "Sam",
+                                    latest_export="Some-Person")])
+        self.assertEqual(lines, ["D0000000003  Alex (nickname)",
+                                 "D0000000004  Sam (nickname)"])
+
+    def test_nickname_in_first_column_is_not_repeated(self):
+        lines = cd.format_rows([row("D0000000003", "", "Alex")], cd.WITH_NICKNAMES)
+        self.assertEqual(lines, ["D0000000003  Alex (nickname)  -"])
 
     def test_unnamed_group_dm_is_labelled_and_named_one_is_not(self):
         lines = cd.format_rows([row(CHAN, "mpdm-ahandle--bhandle-1"),
@@ -288,6 +333,8 @@ class ValidateTests(unittest.TestCase):
                     {"version": 1, "workspaces": {TEAM: {"channels": {
                         CHAN: {"nickname": 5}}}}},
                     {"version": 1, "workspaces": {TEAM: {"channels": {
+                        CHAN: {"kind": 5}}}}},
+                    {"version": 1, "workspaces": {TEAM: {"channels": {
                         CHAN: {"exports": ["Some-File"]}}}}}):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 cd.validate(bad)
@@ -295,7 +342,9 @@ class ValidateTests(unittest.TestCase):
 
 # ── storing it ───────────────────────────────────────────────────────────────
 
-class StoreFileTests(unittest.TestCase):
+class TempStoreTest(unittest.TestCase):
+    """A store path inside a fresh temporary folder, with hermetic git and a
+    permissive umask. Holds no tests, so subclasses don't run each other's."""
 
     def setUp(self):
         holder = tempfile.TemporaryDirectory()
@@ -312,6 +361,9 @@ class StoreFileTests(unittest.TestCase):
         store = cd.empty()
         cd.set_nickname(store, TEAM, "Example", CHAN, "Project Planning")
         return store
+
+
+class StoreFileTests(TempStoreTest):
 
     def test_default_location_is_outside_the_project(self):
         self.assertEqual(ec.DIRECTORY_PATH,
@@ -359,7 +411,8 @@ class StoreFileTests(unittest.TestCase):
 
 # ── the list command ─────────────────────────────────────────────────────────
 
-class ListCommandTests(StoreFileTests):
+class CommandTest(TempStoreTest):
+    """Runs slack-export's main() against the temporary store. Holds no tests."""
 
     def run_main(self, *argv):
         """Run slack-export with these arguments against the temporary store.
@@ -388,6 +441,10 @@ class ListCommandTests(StoreFileTests):
         cd.set_nickname(store, TEAM, "Example", CHAN, "Planning Team")
         cd.set_slack_name(store, TEAM, "Example", OTHER_CHAN, "lab-notes")
         ec.save_directory(store, self.path)
+
+
+
+class ListCommandTests(CommandTest):
 
     def test_lists_ids_and_slack_names_by_default(self):
         self.fill()
@@ -441,6 +498,138 @@ class ListCommandTests(StoreFileTests):
                     mock.patch.object(sys, "argv", ["slack-export", CHAN]):
                 ec.main()
 
+
+
+
+# ── the save command ─────────────────────────────────────────────────────────
+
+GOOD_SCOPES = ("identify,channels:history,channels:read,groups:history,groups:read,"
+               "im:history,im:read,mpim:history,mpim:read,users:read")
+
+
+class FakeSlack:
+    """Stands in for WebClient: auth.test and conversations.info, nothing else."""
+
+    def __init__(self, conversations, scopes=GOOD_SCOPES):
+        self.conversations, self.scopes = conversations, scopes
+        self.calls = []
+
+    def auth_test(self):
+        self.calls.append("auth.test")
+        response = mock.MagicMock()
+        response.headers = {"x-oauth-scopes": self.scopes}
+        fields = {"team_id": TEAM, "team": "Example", "user": "someone",
+                  "user_id": "U0000000001", "url": "https://example.slack.com/"}
+        response.__getitem__.side_effect = fields.__getitem__
+        return response
+
+    def conversations_info(self, channel):
+        self.calls.append(f"conversations.info {channel}")
+        if channel not in self.conversations:
+            raise ec.SlackApiError("not found", {"error": "channel_not_found"})
+        return {"channel": self.conversations[channel]}
+
+
+class SaveCommandTests(CommandTest):
+
+    CONVERSATIONS = {
+        CHAN: {"id": CHAN, "name": "project-planning", "is_private": True},
+        "D0000000003": {"id": "D0000000003", "is_im": True, "user": "U0000000002"},
+        "C0000000004": {"id": "C0000000004", "name": "mpdm-ahandle--bhandle-1",
+                        "is_mpim": True, "is_private": True},
+    }
+
+    def run_save(self, *argv, slack=None):
+        self.slack = slack or FakeSlack(self.CONVERSATIONS)
+        with mock.patch.object(ec, "connect", return_value=self.slack):
+            return self.run_main("save", *argv)
+
+    def stored(self, channel=CHAN):
+        return json.loads(self.path.read_text())["workspaces"][TEAM]["channels"][channel]
+
+    def test_saves_slack_name_and_kind_quietly(self):
+        code, out, _ = self.run_save(CHAN)
+        self.assertEqual(code, 0)
+        self.assertEqual(out, f"{CHAN}  project-planning  (private channel)\n")
+        self.assertEqual(self.stored(), {"slack_name": "project-planning",
+                                         "kind": "private_channel"})
+        self.assertEqual(mode(self.path), 0o600)
+
+    def test_nickname_words_are_joined_and_reported(self):
+        _, out, _ = self.run_save(CHAN, "Planning", "Team")
+        self.assertEqual(out, f"{CHAN}  project-planning  (private channel)\n"
+                              f"  nickname: Planning Team  (added)\n")
+        self.assertEqual(self.stored()["nickname"], "Planning Team")
+
+    def test_bare_save_keeps_the_existing_nickname(self):
+        self.run_save(CHAN, "Planning Team")
+        _, out, _ = self.run_save(CHAN)
+        self.assertEqual(out, f"{CHAN}  project-planning  (private channel)\n"
+                              f"  nickname: Planning Team  (unchanged)\n")
+        self.assertEqual(self.stored()["nickname"], "Planning Team")
+
+    def test_new_nickname_replaces_the_old(self):
+        self.run_save(CHAN, "Old")
+        _, out, _ = self.run_save(CHAN, "New")
+        self.assertIn("nickname: New  (changed)", out)
+
+    def test_duplicate_nickname_is_refused_and_nothing_is_saved(self):
+        self.run_save(CHAN, "Planning Team")
+        before = self.path.read_text()
+        code, _, err = self.run_save("D0000000003", "planning-team")
+        self.assertEqual(code, 1)
+        self.assertIn(f"already used by {CHAN} (project-planning)", err)
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_bare_dm_is_saved_with_a_hint(self):
+        _, out, _ = self.run_save("D0000000003")
+        self.assertEqual(self.stored("D0000000003"), {"kind": "dm"})
+        self.assertIn("D0000000003  -  (DM)", out)
+        self.assertIn("slack-export save D0000000003 <nickname>", out)
+
+    def test_group_dm_kind_and_label(self):
+        _, out, _ = self.run_save("C0000000004")
+        self.assertEqual(out, "C0000000004  [unnamed group DM]  (group DM)\n")
+        self.assertEqual(self.stored("C0000000004")["kind"], "group_dm")
+
+    def test_exported_before_but_no_nickname(self):
+        # An export name is only ever a fallback for display; save leaves it alone.
+        store = cd.empty()
+        cd.record_export(store, TEAM, "Example", "D0000000003", "Some-Person", WHEN)
+        ec.save_directory(store, self.path)
+        _, out, _ = self.run_save("D0000000003")
+        self.assertEqual(out, "D0000000003  Some-Person (from export)  (DM)\n"
+                              "  No nickname yet. To give it one:  "
+                              "slack-export save D0000000003 <nickname>\n")
+        self.assertNotIn("nickname", self.stored("D0000000003"))
+        self.assertEqual(self.stored("D0000000003")["exports"],
+                         {"Some-Person": {"last_export_utc": WHEN}})
+
+    def test_dm_with_nickname_shows_it_in_place_of_a_slack_name(self):
+        _, out, _ = self.run_save("D0000000003", "Alex")
+        self.assertEqual(out, "D0000000003  Alex (nickname)  (DM)\n"
+                              "  nickname: Alex  (added)\n")
+
+    def test_bad_id_fails_before_slack_or_the_store(self):
+        code, _, err = self.run_save("not-an-id")
+        self.assertEqual(code, 1)
+        self.assertIn("is not a Slack conversation ID", err)
+        self.assertEqual(self.slack.calls, [])
+        self.assertFalse(self.path.exists())
+
+    def test_unknown_conversation_saves_nothing(self):
+        code, _, err = self.run_save("C0000000009")
+        self.assertEqual(code, 1)
+        self.assertIn("could not find C0000000009 (channel_not_found)", err)
+        self.assertFalse(self.path.exists())
+
+    def test_read_only_check_still_guards_save(self):
+        slack = FakeSlack(self.CONVERSATIONS, scopes=GOOD_SCOPES + ",chat:write")
+        code, _, err = self.run_save(CHAN, slack=slack)
+        self.assertEqual(code, 1)
+        self.assertIn("unexpected scope", err)
+        self.assertEqual(slack.calls, ["auth.test"])
+        self.assertFalse(self.path.exists())
 
 
 if __name__ == "__main__":
