@@ -26,7 +26,9 @@ conversation named on the command line - it never enumerates the workspace.
     slack-export C0123456789 --out ~/Desktop        # put the .md and .txt there
     slack-export C0123456789                        # again later: append what is new
 
-Saved conversations, so an ID can be found again without going back to Slack:
+Saved conversations, so an ID can be found again without going back to Slack. Every
+export adds itself to the list; `save` is for adding one without exporting it, or
+for giving it a nickname:
 
     slack-export save C0123456789                   # remember it
     slack-export save C0123456789 Planning Team     # ...with your own nickname
@@ -339,6 +341,39 @@ def save_directory(data: dict, path: Path = None) -> None:
     write_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
+def record_in_directory(auth: dict, info: dict, conversation_id: str, stem: str,
+                        when_utc: str, path: Path = None) -> str:
+    """Add this export to the saved list, and say how it went in one line.
+
+    Records the Slack channel name, the kind and the export name; a nickname is
+    only ever set by `save`, so it is left alone. Runs after the export files are
+    written, so a failed export records nothing.
+
+    Never fails the export: the export is what was asked for, and the list can be
+    fixed afterwards. Every problem - a damaged store, a git refusal, a write
+    error - comes back as the line to print instead, which is why this catches the
+    SystemExit that load_directory and save_directory use to stop `save` and `list`.
+    """
+    try:
+        store = load_directory(path)
+        team_id, team_name = auth["team_id"], auth["team"]
+        channel_directory.set_slack_name(store, team_id, team_name, conversation_id,
+                                         info.get("name") or "")
+        channel_directory.set_kind(store, team_id, team_name, conversation_id,
+                                   channel_directory.kind_of(info))
+        channel_directory.record_export(store, team_id, team_name, conversation_id,
+                                        stem, when_utc)
+        save_directory(store, path)
+    except (SystemExit, OSError) as exc:
+        reason = str(exc.code if isinstance(exc, SystemExit) else exc)
+        return (f"NOT updated - the export itself is fine.\n"
+                f"              {reason.removeprefix('FATAL: ')}")
+    row = next(r for r in channel_directory.search(store, conversation_id)
+               if r["team_id"] == team_id and r["channel_id"] == conversation_id)
+    return "  ".join([conversation_id,
+                      channel_directory.shown_slack_name(row) or channel_directory.BLANK])
+
+
 def swap_header(existing: str, new_header: str, marker: str):
     """Replace a rendered file's header block, keeping every message below it.
 
@@ -630,11 +665,12 @@ def list_command(argv) -> None:
         # they are - it is what lets the paragraphs stay separate.
         description="Print every saved conversation, one per line: its ID and its\n"
                     "Slack channel name, sorted by Slack channel name.\n\n"
-                    "A 1:1 DM has no Slack channel name, so it shows your nickname\n"
-                    "for it instead, marked (nickname), or failing that the name of\n"
-                    "its most recent export, marked (from export) - names that did\n"
-                    "not come from Slack. A group DM nobody has named shows as\n"
-                    "[unnamed group DM]. A '-' marks an empty column.\n\n"
+                    "A 1:1 DM, or a group DM nobody has named, has no Slack channel\n"
+                    "name, so it shows your nickname for it instead, marked\n"
+                    "(nickname), or failing that the name of its most recent export,\n"
+                    "marked (from export) - names that did not come from Slack. An\n"
+                    "unnamed group DM with neither shows as [unnamed group DM].\n"
+                    "A '-' marks an empty column.\n\n"
                     "Reads only the saved list - never the Keychain or Slack.",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("-n", "--nicknames", action="store_true",
@@ -974,6 +1010,11 @@ def main() -> None:
         raw["rendered"][str(path)] = raw["last_ts"]
 
     write_atomic(raw_path, json.dumps(raw, indent=2, ensure_ascii=False))
+    # Only now that every file is safely written. In the store's own time format,
+    # not the archive's compact stamp, so export times always sort together.
+    listed = record_in_directory(
+        auth, info, args.conversation_id, stem,
+        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
     copied = False
     if not args.no_clipboard and document:
@@ -1010,6 +1051,7 @@ def main() -> None:
     print(f"  ARCHIVE  : {display_path(raw_path)}"
           f"   ({raw_path.stat().st_size / 1024:.1f} KB)")
     print(f"  clipboard: {'copied - ready to paste' if copied else 'skipped'}")
+    print(f"  saved list: {listed}")
 
     if any(what.startswith("SKIPPED") for _, what, _ in written):
         print()

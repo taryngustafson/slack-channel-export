@@ -258,11 +258,20 @@ def search(data: dict, term: str = "") -> list:
 
 
 # Slack names a group DM nobody has named "mpdm-<handle>--<handle>--...-1". It
-# identifies no one at a glance and makes the column very wide, so list shows a
-# label instead. A group DM that has been given a name comes back without the
-# prefix and is shown as it is.
+# identifies no one at a glance and makes the column very wide, so list treats it
+# as no name at all - falling back as a 1:1 DM does - and shows this label only
+# when there is nothing to fall back to. A group DM that has been given a name
+# comes back without the prefix and is shown as it is.
 UNNAMED_GROUP_DM_PREFIX = "mpdm-"
 UNNAMED_GROUP_DM = "[unnamed group DM]"
+
+
+def _real_slack_name(row: dict) -> str:
+    """The Slack name, or "" when there is none worth showing: a 1:1 DM, or a
+    group DM nobody has named."""
+    if row["slack_name"].startswith(UNNAMED_GROUP_DM_PREFIX):
+        return ""
+    return row["slack_name"]
 
 
 # Marks a name taken from an export file rather than from Slack or the user.
@@ -285,30 +294,32 @@ def _export_fallback(row: dict) -> str:
 def shown_slack_name(row: dict) -> str:
     """The Slack channel name as list prints it.
 
-    A 1:1 DM has no Slack name at all, so without a fallback it would be a bare ID.
-    It shows the user's nickname instead, marked "(nickname)", or failing that its
-    most recent export name, marked "(from export)". The nickname comes first
-    because the user chose it; an export name is only whatever the file was called.
+    A 1:1 DM has no Slack name at all, and an unnamed group DM has none worth
+    showing, so without a fallback either would be a bare ID. It shows the user's
+    nickname instead, marked "(nickname)", or failing that its most recent export
+    name, marked "(from export)". The nickname comes first because the user chose
+    it; an export name is only whatever the file was called. An unnamed group DM
+    with neither is labelled as one.
     """
-    if row["slack_name"].startswith(UNNAMED_GROUP_DM_PREFIX):
-        return UNNAMED_GROUP_DM
-    if row["slack_name"]:
+    if _real_slack_name(row):
         return row["slack_name"]
     if row["nickname"]:
         return row["nickname"] + FROM_NICKNAME
-    return _export_fallback(row)
+    if row["latest_export_name"]:
+        return _export_fallback(row)
+    return UNNAMED_GROUP_DM if row["slack_name"] else ""
 
 
 def shown_nickname(row: dict) -> str:
     """The user's nickname, or else the most recent export name, marked - unless
     that only repeats what the Slack channel name column already shows.
 
-    It repeats it when there is no Slack name (the first column already fell back
-    to the nickname or the export name), or when the export name and the Slack
-    name are the same words. The NAMES are compared, not the displayed text, which
-    would always differ by the marker.
+    It repeats it when there is no Slack name worth showing (the first column
+    already fell back to the nickname or the export name), or when the export name
+    and the Slack name are the same words. The NAMES are compared, not the
+    displayed text, which would always differ by the marker.
     """
-    if not row["slack_name"]:
+    if not _real_slack_name(row):
         return ""
     if row["nickname"]:
         return row["nickname"]

@@ -180,6 +180,11 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(self.ids("ahandle"), [])
         self.assertEqual(self.ids("unnamed group"), ["C0000000004"])
 
+    def test_exported_unnamed_group_dm_matches_its_export_name(self):
+        cd.record_export(self.store, TEAM, "Example", "C0000000004", "Group-Chat", WHEN)
+        self.assertEqual(self.ids("group chat"), ["C0000000004"])
+        self.assertEqual(self.ids("unnamed group"), [])
+
     def test_ignores_case_spaces_and_punctuation(self):
         self.assertEqual(self.ids("PROJECT planning"), [CHAN])
         self.assertEqual(self.ids("project_planning"), [CHAN])
@@ -279,11 +284,25 @@ class SortAndFormatTests(unittest.TestCase):
 
     def test_nickname_column_falls_back_to_a_different_export_name(self):
         lines = cd.format_rows(
-            [row(CHAN, "mpdm-ahandle--bhandle-1", latest_export="Group-Chat"),
+            [row(CHAN, "project-planning", latest_export="Planning-Notes"),
              row(OTHER_CHAN, "chan", "Mine", latest_export="Ignored")],
             cd.WITH_NICKNAMES)
-        self.assertEqual(lines, [f"{CHAN}  [unnamed group DM]  Group-Chat (from export)",
-                                 f"{OTHER_CHAN}  chan                Mine"])
+        self.assertEqual(lines, [f"{CHAN}  project-planning  Planning-Notes (from export)",
+                                 f"{OTHER_CHAN}  chan              Mine"])
+
+    def test_unnamed_group_dm_falls_back_like_a_dm(self):
+        # Its mpdm- name identifies no one, so it counts as no Slack name: the
+        # nickname, then the export name, then the label. Nothing is repeated
+        # in the nickname column.
+        mpdm = "mpdm-ahandle--bhandle-1"
+        lines = cd.format_rows(
+            [row("C0000000004", mpdm, "Grant Group", latest_export="Group-Chat"),
+             row("C0000000005", mpdm, latest_export="Group-Chat"),
+             row("C0000000006", mpdm)],
+            cd.WITH_NICKNAMES)
+        self.assertEqual(lines, ["C0000000004  Grant Group (nickname)    -",
+                                 "C0000000005  Group-Chat (from export)  -",
+                                 "C0000000006  [unnamed group DM]        -"])
 
     def test_fallback_that_repeats_the_first_column_is_hidden(self):
         # Same words, different case and hyphens: still a repeat.
@@ -634,3 +653,63 @@ class SaveCommandTests(CommandTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── recording an export ──────────────────────────────────────────────────────
+
+class RecordExportTests(TempStoreTest):
+
+    AUTH = {"team_id": TEAM, "team": "Example"}
+    CHANNEL = {"id": CHAN, "name": "project-planning", "is_private": True}
+    DM = {"id": "D0000000003", "is_im": True, "user": "U0000000002"}
+
+    def record(self, info, stem, when=WHEN):
+        return ec.record_in_directory(self.AUTH, info, info["id"], stem, when,
+                                      self.path)
+
+    def stored(self, channel=CHAN):
+        return json.loads(self.path.read_text())["workspaces"][TEAM]["channels"][channel]
+
+    def test_named_export_records_name_kind_and_file(self):
+        line = self.record(self.CHANNEL, "Planning")
+        self.assertEqual(line, f"{CHAN}  project-planning")
+        self.assertEqual(self.stored(), {
+            "slack_name": "project-planning", "kind": "private_channel",
+            "exports": {"Planning": {"last_export_utc": WHEN}}})
+        self.assertEqual(mode(self.path), 0o600)
+
+    def test_unnamed_export_is_recorded_under_its_id(self):
+        line = self.record(self.DM, "D0000000003")
+        self.assertEqual(line, "D0000000003  D0000000003 (from export)")
+        self.assertEqual(self.stored("D0000000003")["exports"],
+                         {"D0000000003": {"last_export_utc": WHEN}})
+
+    def test_nickname_is_kept_and_shown(self):
+        store = cd.empty()
+        cd.set_nickname(store, TEAM, "Example", "D0000000003", "Alex")
+        ec.save_directory(store, self.path)
+        line = self.record(self.DM, "Some-Person")
+        self.assertEqual(line, "D0000000003  Alex (nickname)")
+        self.assertEqual(self.stored("D0000000003")["nickname"], "Alex")
+
+    def test_a_top_up_moves_the_time_forward(self):
+        self.record(self.CHANNEL, "Planning")
+        self.record(self.CHANNEL, "Planning", LATER)
+        self.assertEqual(self.stored()["exports"],
+                         {"Planning": {"last_export_utc": LATER}})
+
+    def test_damaged_store_is_a_warning_and_is_left_alone(self):
+        self.path.parent.mkdir(parents=True)
+        self.path.write_text("{ not json")
+        line = self.record(self.CHANNEL, "Planning")
+        self.assertTrue(line.startswith("NOT updated - the export itself is fine."))
+        self.assertIn("is unreadable", line)
+        self.assertNotIn("FATAL", line)
+        self.assertEqual(self.path.read_text(), "{ not json")
+
+    def test_store_git_could_commit_is_a_warning_and_not_written(self):
+        subprocess.run(["git", "init", "-q", str(self.tmp)], check=True)
+        line = self.record(self.CHANNEL, "Planning")
+        self.assertTrue(line.startswith("NOT updated"))
+        self.assertIn("inside a git repository", line)
+        self.assertFalse(self.path.exists())
