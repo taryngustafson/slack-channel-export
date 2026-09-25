@@ -143,7 +143,34 @@ Options can be combined with a name:
 slack-export C0123456789 Project Planning --no-clipboard
 ```
 
-For detailed examples and re-running existing exports, see **[USAGE.md](USAGE.md)**.
+### Find a conversation again
+
+`slack-export` keeps a small saved list so you do not have to remember conversation IDs or go back to Slack to find them again.
+
+```sh
+slack-export list
+```
+
+```text
+D0123456789  Alex (nickname)
+C0123456789  project-planning
+```
+
+You can search the list by name or ID:
+
+```sh
+slack-export list planning
+```
+
+You can give any conversation your own nickname:
+
+```sh
+slack-export save D0123456789 Alex
+```
+
+You can also use `save` to remember a conversation without exporting it first.
+
+For more about the saved list, re-running existing exports, and other options, see **[USAGE.md](USAGE.md)**.
 
 ## What gets saved
 
@@ -156,6 +183,8 @@ Each export has three parts:
 | `.raw.json` | `exports/raw/` | Raw Slack data used for incremental updates and re-rendering |
 
 The Markdown version is what gets copied to your clipboard.
+
+The saved list is kept separately at `~/.config/slack-export/channels.json`. It stores the information needed to find conversations again, such as conversation and workspace IDs/names, nicknames, conversation type, and export names/times. It does **not** contain Slack message text or attachments.
 
 Example text output:
 
@@ -209,9 +238,9 @@ Slack exports can contain private conversations, so the project includes several
 * the Slack app requests only the permissions the exporter needs
 * the exporter refuses to run if Slack reports any unexpected permission
 * the token is stored in macOS Keychain rather than in the project files
-* generated export files are created with owner-only permissions
-* `exports/` is ignored by Git
-* the exporter refuses to write into a Git repository if the generated files would be trackable
+* generated export files and the saved list are created with owner-only permissions
+* `exports/` is ignored by Git, and the saved list is kept outside the project folder
+* if generated files or the saved list are inside a Git repository, the exporter refuses to write them if Git could track them
 * the tool reads only the conversation you explicitly provide
 * attachments are exported as links rather than downloaded
 
@@ -230,7 +259,7 @@ It uses:
 ## Documentation
 
 * **[SLACK-SETUP.md](SLACK-SETUP.md)** — one-time Slack app and token setup
-* **[USAGE.md](USAGE.md)** — detailed day-to-day usage, options, incremental updates, and troubleshooting
+* **[USAGE.md](USAGE.md)** — detailed day-to-day usage, options, incremental updates, the saved list, and troubleshooting
 
 ## License
 

@@ -258,6 +258,149 @@ Team-Notes.md
 
 for one channel and try to use `Team Notes` for another channel, the exporter refuses rather than combining the two conversations.
 
+## Find a conversation again
+
+Conversation IDs are not very memorable, so `slack-export` keeps a saved list of conversations you have exported or saved.
+
+After an export, the last lines show whether the saved list was updated:
+
+```text
+  saved list: C0123456789  project-planning
+```
+
+If the list cannot be updated, the export itself is still complete. The command tells you what went wrong separately.
+
+### See what is saved
+
+```sh
+slack-export list
+```
+
+This shows each saved conversation's ID and the best available name:
+
+```text
+D0123456789  Alex (nickname)
+C0234567890  lab-notes
+C0123456789  project-planning
+D0987654321  Sam-Lee (from export)
+C0345678901  Trip-Planning-Group (from export)
+```
+
+`list` is completely local. It reads the saved file only and does not contact Slack or read your Slack token, so it also works offline.
+
+### Where the names come from
+
+For a regular channel, `list` shows its Slack channel name.
+
+DMs do not have Slack channel names. An unnamed group DM technically has an internal Slack name beginning with `mpdm-`, but that is not very useful to a person, so `slack-export` does not show it as the conversation's name.
+
+When there is no useful Slack name, the list falls back to:
+
+| Shown as | Meaning |
+| --- | --- |
+| `Alex (nickname)` | a nickname you gave the conversation |
+| `Sam-Lee (from export)` | no nickname, so the name of its most recent export |
+| `[unnamed group DM]` | an unnamed group DM with neither a nickname nor previous export name |
+| `-` | a DM with neither |
+
+A normal Slack channel whose actual name starts with `mpdm-` is still shown normally.
+
+### Search the list
+
+Add a search after `list`:
+
+```sh
+slack-export list planning
+```
+
+You can search by conversation ID or by the names shown in the list.
+
+```text
+C0123456789  project-planning                   -
+C0345678901  Trip-Planning-Group (from export)  -
+```
+
+For normal words, search ignores case and differences such as spaces or punctuation. For example, these both find the same name:
+
+```text
+project planning
+Project-Planning
+```
+
+A search containing only symbols or emoji is searched literally instead, rather than being treated as an empty search.
+
+You can also search with part of an ID:
+
+```sh
+slack-export list C0123
+```
+
+When you search, the output includes a third column for a nickname or a different recent export name when one is available.
+
+To show that column without searching:
+
+```sh
+slack-export list -n
+```
+
+```text
+D0123456789  Alex (nickname)                    -
+C0234567890  lab-notes                          Bench Work
+C0123456789  project-planning                   -
+D0987654321  Sam-Lee (from export)              -
+C0345678901  Trip-Planning-Group (from export)  -
+```
+
+### Give a conversation a nickname
+
+```sh
+slack-export save D0123456789 Alex
+```
+
+A nickname is your own name for a conversation. It is especially useful for DMs, which do not have Slack channel names.
+
+Quotes are optional, just like they are when naming an export:
+
+```sh
+slack-export save D0123456789 "Alex Kim"
+```
+
+Within the same Slack workspace, a nickname can belong to only one saved conversation.
+
+Saving the same conversation again with a new nickname changes it. Saving it again without a nickname leaves the existing nickname alone.
+
+### Save a conversation without exporting it
+
+You can add a conversation to the list without downloading its messages:
+
+```sh
+slack-export save C0123456789
+```
+
+Unlike `list`, `save` does contact Slack. It uses the same read-only access as the exporter to make sure the conversation exists and to get its current name and type.
+
+Running `save` again later also refreshes the Slack channel name if it has changed.
+
+### Where the saved list lives
+
+```text
+~/.config/slack-export/channels.json
+```
+
+The file stores lookup information such as:
+
+- conversation IDs and Slack names
+- conversation type
+- your nicknames
+- workspace ID/name
+- export names and times
+
+It does **not** contain Slack message text or attachments.
+
+The folder and file are created with owner-only permissions.
+
+The saved list normally lives outside the `slack-channel-export` project. If its location is inside another Git repository — for example, because you keep `~/.config` in a dotfiles repo — `slack-export` checks whether Git could track `channels.json` and refuses to write it unless that file is ignored.
+
 ## Options
 
 Most exports only need the basic command:
@@ -413,6 +556,30 @@ Choose:
 * a location the repository already ignores
 
 For example, the project's normal `exports/` directory is already configured appropriately.
+
+### `saved list: NOT updated - the export itself is fine`
+
+The export worked, but it could not be added to the saved list. The line below it gives the reason. Your exported files are complete.
+
+Once the problem is fixed, running the same export again adds it.
+
+### `channels.json is unreadable`
+
+The saved list is not valid JSON, or has a structure this version does not understand. `slack-export` stops rather than quietly starting a new, empty list, which would lose every saved name.
+
+Fix the file, or move it aside to start the list over:
+
+```sh
+mv ~/.config/slack-export/channels.json ~/.config/slack-export/channels.json.old
+```
+
+### `refusing to save channel names to ~/.config/slack-export/channels.json`
+
+The saved list is inside a Git repository that does not ignore it, so its names and IDs could be committed. Add `channels.json` to that repository's `.gitignore`.
+
+### `the nickname '...' is already used by`
+
+Within a workspace, each nickname can belong to only one conversation. The message names the conversation that already has it. Choose another nickname, or give that conversation a different one first.
 
 ## Good to know
 
