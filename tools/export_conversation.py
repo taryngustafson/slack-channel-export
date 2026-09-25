@@ -685,7 +685,9 @@ def list_command(argv) -> None:
                              "nickname column, so you can see why each line "
                              "matched")
     args = parser.parse_args(argv)
-    term = " ".join(args.search)
+    # None when no search was typed, so only that lists everything: a typed term
+    # has to match, even one that is only punctuation.
+    term = " ".join(args.search) if args.search else None
 
     store = load_directory()
     rows = channel_directory.search(store, term)
@@ -764,7 +766,7 @@ def save_command(argv) -> None:
     if row["nickname"]:
         print(f"  nickname: {row['nickname']}  "
               f"({outcome if nickname else 'unchanged'})")
-    elif not row["slack_name"]:
+    elif not channel_directory.real_slack_name(row):
         # Slack gives it no name, so only a nickname identifies it for good. Said
         # outright when an export name is standing in, which could otherwise be
         # read as a nickname just saved.

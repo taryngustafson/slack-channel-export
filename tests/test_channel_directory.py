@@ -144,6 +144,21 @@ class NameTests(unittest.TestCase):
         self.assertEqual(self.store["workspaces"][TEAM]["name"], "Renamed Workspace")
 
 
+class SymbolNicknameTests(unittest.TestCase):
+
+    def test_different_emoji_nicknames_are_different(self):
+        store = cd.empty()
+        cd.set_nickname(store, TEAM, "Example", "D0000000005", "🎉")
+        self.assertEqual(cd.set_nickname(store, TEAM, "Example", "D0000000006", "🚀"),
+                         "added")
+
+    def test_the_same_emoji_nickname_is_taken(self):
+        store = cd.empty()
+        cd.set_nickname(store, TEAM, "Example", "D0000000005", "🎉")
+        with self.assertRaises(cd.NicknameTaken):
+            cd.set_nickname(store, TEAM, "Example", "D0000000006", " 🎉 ")
+
+
 class SearchTests(unittest.TestCase):
 
     def setUp(self):
@@ -158,8 +173,9 @@ class SearchTests(unittest.TestCase):
         cd.set_nickname(self.store, OTHER_TEAM, "Another", "D0000000003", "Alex")
         cd.set_slack_name(self.store, TEAM, "Example", "C0000000004",
                           "mpdm-ahandle--bhandle-1")
+        cd.set_kind(self.store, TEAM, "Example", "C0000000004", "group_dm")
 
-    def ids(self, term=""):
+    def ids(self, term=None):
         return sorted(row["channel_id"] for row in cd.search(self.store, term))
 
     def test_no_term_lists_everything(self):
@@ -185,6 +201,22 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(self.ids("group chat"), ["C0000000004"])
         self.assertEqual(self.ids("unnamed group"), [])
 
+    def test_punctuation_only_search_does_not_match_everything(self):
+        self.assertEqual(self.ids("!!!"), [])
+        self.assertEqual(self.ids("?!"), [])
+        self.assertEqual(self.ids(""), [])
+        self.assertEqual(self.ids("   "), [])
+
+    def test_symbol_or_emoji_search_matches_as_typed(self):
+        cd.set_nickname(self.store, TEAM, "Example", "D0000000005", "🎉")
+        cd.set_nickname(self.store, TEAM, "Example", "D0000000006", "Party 🚀")
+        cd.set_nickname(self.store, TEAM, "Example", "D0000000007", "C++ help")
+        self.assertEqual(self.ids("🎉"), ["D0000000005"])
+        self.assertEqual(self.ids("🚀"), ["D0000000006"])
+        self.assertEqual(self.ids("party"), ["D0000000006"])
+        self.assertEqual(self.ids("🌮"), [])
+        self.assertEqual(self.ids("++"), ["D0000000007"])
+
     def test_ignores_case_spaces_and_punctuation(self):
         self.assertEqual(self.ids("PROJECT planning"), [CHAN])
         self.assertEqual(self.ids("project_planning"), [CHAN])
@@ -206,9 +238,9 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(cd.search(self.store, "nothing like this"), [])
 
 
-def row(channel_id, slack_name="", nickname="", latest_export=""):
+def row(channel_id, slack_name="", nickname="", latest_export="", kind=""):
     return {"team_id": TEAM, "team_name": "Example", "channel_id": channel_id,
-            "nickname": nickname, "slack_name": slack_name, "kind": "",
+            "nickname": nickname, "slack_name": slack_name, "kind": kind,
             "export_names": [latest_export] if latest_export else [],
             "latest_export_name": latest_export, "last_export_utc": ""}
 
@@ -271,10 +303,19 @@ class SortAndFormatTests(unittest.TestCase):
         self.assertEqual(lines, ["D0000000003  Alex (nickname)  -"])
 
     def test_unnamed_group_dm_is_labelled_and_named_one_is_not(self):
-        lines = cd.format_rows([row(CHAN, "mpdm-ahandle--bhandle-1"),
-                                row(OTHER_CHAN, "Named Group")])
+        lines = cd.format_rows([row(CHAN, "mpdm-ahandle--bhandle-1", kind="group_dm"),
+                                row(OTHER_CHAN, "Named Group", kind="group_dm")])
         self.assertEqual(lines, [f"{CHAN}  [unnamed group DM]",
                                  f"{OTHER_CHAN}  Named Group"])
+
+    def test_channel_named_mpdm_is_shown_as_it_is(self):
+        # Only a group DM's generated name is replaced; a channel may really be
+        # called this.
+        for kind in ("public_channel", "private_channel"):
+            with self.subTest(kind=kind):
+                lines = cd.format_rows([row(CHAN, "mpdm-roadmap", kind=kind,
+                                            latest_export="Roadmap")])
+                self.assertEqual(lines, [f"{CHAN}  mpdm-roadmap"])
 
     def test_no_slack_name_falls_back_to_marked_export_name(self):
         lines = cd.format_rows([row("D0000000003", latest_export="Some-Person"),
@@ -296,9 +337,10 @@ class SortAndFormatTests(unittest.TestCase):
         # in the nickname column.
         mpdm = "mpdm-ahandle--bhandle-1"
         lines = cd.format_rows(
-            [row("C0000000004", mpdm, "Grant Group", latest_export="Group-Chat"),
-             row("C0000000005", mpdm, latest_export="Group-Chat"),
-             row("C0000000006", mpdm)],
+            [row("C0000000004", mpdm, "Grant Group", latest_export="Group-Chat",
+                 kind="group_dm"),
+             row("C0000000005", mpdm, latest_export="Group-Chat", kind="group_dm"),
+             row("C0000000006", mpdm, kind="group_dm")],
             cd.WITH_NICKNAMES)
         self.assertEqual(lines, ["C0000000004  Grant Group (nickname)    -",
                                  "C0000000005  Group-Chat (from export)  -",
@@ -501,6 +543,12 @@ class ListCommandTests(CommandTest):
         self.assertEqual((code, out), (1, ""))
         self.assertIn("No saved conversation matches 'nothing like this'", err)
 
+    def test_punctuation_only_search_is_not_match_all(self):
+        self.fill()
+        code, out, err = self.run_main("list", "!!!")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("No saved conversation matches '!!!'", err)
+
     def test_empty_store_says_so_and_creates_nothing(self):
         code, out, _ = self.run_main("list")
         self.assertEqual(code, 0)
@@ -606,9 +654,18 @@ class SaveCommandTests(CommandTest):
         self.assertIn("D0000000003  -  (DM)", out)
         self.assertIn("slack-export save D0000000003 <nickname>", out)
 
+    def test_named_group_dm_gets_no_nickname_hint(self):
+        conversations = dict(self.CONVERSATIONS)
+        conversations["C0000000004"] = dict(conversations["C0000000004"],
+                                            name="Trip Planning")
+        _, out, _ = self.run_save("C0000000004", slack=FakeSlack(conversations))
+        self.assertEqual(out, "C0000000004  Trip Planning  (group DM)\n")
+
     def test_group_dm_kind_and_label(self):
         _, out, _ = self.run_save("C0000000004")
-        self.assertEqual(out, "C0000000004  [unnamed group DM]  (group DM)\n")
+        self.assertEqual(out, "C0000000004  [unnamed group DM]  (group DM)\n"
+                              "  No nickname yet. To give it one:  "
+                              "slack-export save C0000000004 <nickname>\n")
         self.assertEqual(self.stored("C0000000004")["kind"], "group_dm")
 
     def test_exported_before_but_no_nickname(self):

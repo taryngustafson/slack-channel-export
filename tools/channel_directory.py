@@ -118,12 +118,14 @@ def nickname_owner(data: dict, team_id: str, nickname: str):
 
     Compared the way search compares, so "Project Planning" and "project-planning"
     count as the same nickname: two that differ only in case or punctuation could
-    never be told apart when typed back in.
+    never be told apart when typed back in. A nickname with no letters or digits
+    at all, such as an emoji, is compared as typed, so two different ones are not
+    mistaken for the same.
     """
-    wanted = _words(nickname)
+    wanted = _name_key(nickname)
     workspace = data["workspaces"].get(team_id, {"channels": {}})
     for channel_id, entry in workspace["channels"].items():
-        if entry.get("nickname") and _words(entry["nickname"]) == wanted:
+        if entry.get("nickname") and _name_key(entry["nickname"]) == wanted:
             return channel_id, entry
     return None
 
@@ -211,6 +213,31 @@ def _words(text: str) -> str:
     return " ".join(re.split(r"[\W_]+", text.casefold())).strip()
 
 
+def _name_key(text: str) -> str:
+    """What two names are compared by: their words, or, when they have none
+    (only punctuation or emoji), the text itself ignoring case and outer spaces.
+
+    Without that second part every such name would reduce to "" and match all
+    the others.
+    """
+    return _words(text) or text.casefold().strip()
+
+
+def _matches(term: str, text: str) -> bool:
+    """Whether a search `term` is found in displayed `text`, as search matches.
+
+    By words when the term has any, so case, spaces and punctuation are ignored.
+    A term with no letters or digits (only punctuation or emoji) is looked for as
+    typed instead, ignoring case - and one with nothing at all matches nothing,
+    never everything.
+    """
+    needle = _words(term)
+    if needle:
+        return needle in _words(text)
+    literal = term.casefold().strip()
+    return bool(literal) and literal in text.casefold()
+
+
 def _latest_export(exports: dict) -> str:
     """The file name of the most recent export, or "" if there has been none."""
     if not exports:
@@ -219,11 +246,13 @@ def _latest_export(exports: dict) -> str:
                                           stem))
 
 
-def search(data: dict, term: str = "") -> list:
+def search(data: dict, term: str = None) -> list:
     """Every entry with `term` in what `list` shows for it: ID, Slack channel name,
     or nickname - including a nickname filled in from an export name.
 
-    Case, spaces and punctuation are ignored. An empty term matches everything.
+    Case, spaces and punctuation are ignored. Leaving the term out (None) matches
+    everything; a term that is given always has to match (see _matches), even if
+    it is only punctuation.
     Matching the ID as well as the names is what makes one search work in both
     directions - a name finds its ID, and an ID (or the start of one) finds its
     names.
@@ -237,7 +266,6 @@ def search(data: dict, term: str = "") -> list:
     the columns is left to sort_rows and format_rows, so a new sort order or a new
     column never means changing the search.
     """
-    needle = _words(term)
     rows = []
     for team_id, workspace in data["workspaces"].items():
         for channel_id, entry in workspace["channels"].items():
@@ -252,7 +280,8 @@ def search(data: dict, term: str = "") -> list:
                    "export_names": sorted(exports),
                    "latest_export_name": _latest_export(exports),
                    "last_export_utc": max(times, default="")}
-            if any(needle in _words(COLUMNS[column](row)) for column in SEARCHED):
+            if term is None or any(_matches(term, COLUMNS[column](row))
+                                   for column in SEARCHED):
                 rows.append(row)
     return rows
 
@@ -266,12 +295,20 @@ UNNAMED_GROUP_DM_PREFIX = "mpdm-"
 UNNAMED_GROUP_DM = "[unnamed group DM]"
 
 
-def _real_slack_name(row: dict) -> str:
+def is_unnamed_group_dm(row: dict) -> bool:
+    """A group DM still carrying the name Slack generated for it.
+
+    Checked on the kind as well as the prefix: an ordinary channel may really be
+    called "mpdm-roadmap", and that is a name worth showing.
+    """
+    return (row["kind"] == "group_dm"
+            and row["slack_name"].startswith(UNNAMED_GROUP_DM_PREFIX))
+
+
+def real_slack_name(row: dict) -> str:
     """The Slack name, or "" when there is none worth showing: a 1:1 DM, or a
     group DM nobody has named."""
-    if row["slack_name"].startswith(UNNAMED_GROUP_DM_PREFIX):
-        return ""
-    return row["slack_name"]
+    return "" if is_unnamed_group_dm(row) else row["slack_name"]
 
 
 # Marks a name taken from an export file rather than from Slack or the user.
@@ -301,13 +338,13 @@ def shown_slack_name(row: dict) -> str:
     it; an export name is only whatever the file was called. An unnamed group DM
     with neither is labelled as one.
     """
-    if _real_slack_name(row):
+    if real_slack_name(row):
         return row["slack_name"]
     if row["nickname"]:
         return row["nickname"] + FROM_NICKNAME
     if row["latest_export_name"]:
         return _export_fallback(row)
-    return UNNAMED_GROUP_DM if row["slack_name"] else ""
+    return UNNAMED_GROUP_DM if is_unnamed_group_dm(row) else ""
 
 
 def shown_nickname(row: dict) -> str:
@@ -319,7 +356,7 @@ def shown_nickname(row: dict) -> str:
     and the Slack name are the same words. The NAMES are compared, not the
     displayed text, which would always differ by the marker.
     """
-    if not _real_slack_name(row):
+    if not real_slack_name(row):
         return ""
     if row["nickname"]:
         return row["nickname"]
