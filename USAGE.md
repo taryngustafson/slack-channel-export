@@ -279,6 +279,7 @@ slack-export list
 This shows each saved conversation in three columns: its ID, your nickname for it, and its Slack channel name.
 
 ```text
+ID           NICKNAME               SLACK NAME
 D0123456789  Alex                   (DM)
 C0234567890  Bench Work             lab-notes
 C0123456789  -                      project-planning
@@ -313,6 +314,7 @@ slack-export list planning
 You can search by conversation ID or by the names shown in the list.
 
 ```text
+ID           NICKNAME               SLACK NAME
 C0123456789  -                      project-planning
 C0345678901  [Trip-Planning-Group]  (DM)
 ```

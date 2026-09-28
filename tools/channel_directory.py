@@ -421,14 +421,26 @@ def sort_rows(rows: list, by: str = DEFAULT_SORT) -> list:
 BLANK = "-"
 
 
-def format_rows(rows: list, columns=DEFAULT_COLUMNS) -> list:
-    """One line of text per row, the chosen columns in order.
+# The heading printed above each column. Capitals, as `ps` and `docker ps` do, so
+# the header cannot be mistaken for a saved conversation.
+HEADERS = {
+    "id": "ID",
+    "nickname": "NICKNAME",
+    "slack_name": "SLACK NAME",
+}
 
-    Every column but the last is padded to its widest value, so the columns line
-    up, and no line ends in spaces. Two spaces between columns, since a name can
-    itself contain single spaces. An empty cell prints as BLANK.
+
+def format_rows(rows: list, columns=DEFAULT_COLUMNS, header: bool = False) -> list:
+    """One line of text per row, the chosen columns in order, after a header line
+    naming the columns if `header` is set.
+
+    Every column but the last is padded to its widest value, header included, so
+    the columns line up, and no line ends in spaces. Two spaces between columns,
+    since a name can itself contain single spaces. An empty cell prints as BLANK.
     """
     cells = [[COLUMNS[column](row) or BLANK for column in columns] for row in rows]
+    if header:
+        cells.insert(0, [HEADERS[column] for column in columns])
     widths = [max((len(line[i]) for line in cells), default=0)
               for i in range(len(columns))]
     return ["  ".join([cell.ljust(width) for cell, width in zip(line[:-1], widths)]

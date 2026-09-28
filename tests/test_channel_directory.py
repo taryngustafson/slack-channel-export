@@ -278,6 +278,11 @@ class SortAndFormatTests(unittest.TestCase):
         self.assertEqual(lines, ["C00000001    Mine       short",
                                  "C0000000002  Also Mine  a-longer-name"])
 
+    def test_header_names_the_columns_and_widens_them_if_needed(self):
+        lines = cd.format_rows([row(CHAN, "chan")], header=True)
+        self.assertEqual(lines, ["ID           NICKNAME  SLACK NAME",
+                                 f"{CHAN}  -         chan"])
+
     def test_blank_cells_print_a_placeholder(self):
         # No nickname and never exported; a channel not yet named by Slack.
         lines = cd.format_rows([row(CHAN, "project-planning"),
@@ -497,7 +502,8 @@ class ListCommandTests(CommandTest):
         self.fill()
         code, out, _ = self.run_main("list")
         self.assertEqual(code, 0)
-        self.assertEqual(out, f"{OTHER_CHAN}  -              lab-notes\n"
+        self.assertEqual(out, "ID           NICKNAME       SLACK NAME\n"
+                              f"{OTHER_CHAN}  -              lab-notes\n"
                               f"{CHAN}  Planning Team  project-planning\n")
 
     def test_retired_nicknames_flag_is_still_accepted(self):
@@ -511,17 +517,20 @@ class ListCommandTests(CommandTest):
     def test_a_search_shows_the_nickname_that_matched(self):
         self.fill()
         _, out, _ = self.run_main("list", "team")
-        self.assertEqual(out, f"{CHAN}  Planning Team  project-planning\n")
+        self.assertEqual(out, "ID           NICKNAME       SLACK NAME\n"
+                              f"{CHAN}  Planning Team  project-planning\n")
 
     def test_search_words_are_joined_without_quotes(self):
         self.fill()
         _, out, _ = self.run_main("list", "project", "PLAN")
-        self.assertEqual(out, f"{CHAN}  Planning Team  project-planning\n")
+        self.assertEqual(out, "ID           NICKNAME       SLACK NAME\n"
+                              f"{CHAN}  Planning Team  project-planning\n")
 
     def test_search_by_id(self):
         self.fill()
         _, out, _ = self.run_main("list", OTHER_CHAN)
-        self.assertEqual(out, f"{OTHER_CHAN}  -  lab-notes\n")
+        self.assertEqual(out, "ID           NICKNAME  SLACK NAME\n"
+                              f"{OTHER_CHAN}  -         lab-notes\n")
 
     def test_no_match_exits_1_like_grep(self):
         self.fill()

@@ -662,9 +662,9 @@ def list_command(argv) -> None:
         prog="slack-export list",
         # Line breaks written out, since RawDescriptionHelpFormatter keeps them as
         # they are - it is what lets the paragraphs stay separate.
-        description="Print every saved conversation, one per line, in three\n"
-                    "columns: its ID, your nickname for it, and its Slack channel\n"
-                    "name. Sorted by Slack channel name, or by nickname for a\n"
+        description="Print every saved conversation, one per line, under a header\n"
+                    "naming the three columns: its ID, your nickname for it, and\n"
+                    "its Slack channel name. Sorted by Slack channel name, or by nickname for a\n"
                     "conversation Slack gives no name, such as a 1:1 DM.\n\n"
                     "With no nickname, the nickname column shows the name of its\n"
                     "most recent export in [brackets] - a name you did not choose -\n"
@@ -696,7 +696,8 @@ def list_command(argv) -> None:
             sys.exit(f"No saved conversation matches '{term}'.")
         print("No saved conversations yet.")
         return
-    for line in channel_directory.format_rows(channel_directory.sort_rows(rows)):
+    for line in channel_directory.format_rows(channel_directory.sort_rows(rows),
+                                              header=True):
         print(line)
 
 
