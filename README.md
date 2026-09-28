@@ -152,9 +152,11 @@ slack-export list
 ```
 
 ```text
-D0123456789  Alex (nickname)
-C0123456789  project-planning
+D0123456789  Alex  (DM)
+C0123456789  -     project-planning
 ```
+
+The columns are the conversation ID, your nickname for it, and its Slack channel name.
 
 You can search the list by name or ID:
 

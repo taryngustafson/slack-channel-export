@@ -292,7 +292,7 @@ def search(data: dict, term: str = None) -> list:
 # when there is nothing to fall back to. A group DM that has been given a name
 # comes back without the prefix and is shown as it is.
 UNNAMED_GROUP_DM_PREFIX = "mpdm-"
-UNNAMED_GROUP_DM = "[unnamed group DM]"
+UNNAMED_GROUP_DM = "(unnamed group DM)"
 
 
 def is_unnamed_group_dm(row: dict) -> bool:
@@ -347,43 +347,66 @@ def shown_slack_name(row: dict) -> str:
     return UNNAMED_GROUP_DM if is_unnamed_group_dm(row) else ""
 
 
-def shown_nickname(row: dict) -> str:
-    """The user's nickname, or else the most recent export name, marked - unless
-    that only repeats what the Slack channel name column already shows.
+def list_nickname(row: dict) -> str:
+    """The nickname column of `list`: the user's nickname, or else the most recent
+    export name in [brackets], or "" when there is neither.
 
-    It repeats it when there is no Slack name worth showing (the first column
-    already fell back to the nickname or the export name), or when the export name
-    and the Slack name are the same words. The NAMES are compared, not the
-    displayed text, which would always differ by the marker.
+    An export given no name is saved under the conversation ID, which would only
+    repeat the ID column, so it counts as no name.
+
+    The brackets are the only thing showing that the user did not choose this
+    name - it is only whatever the file was called - so they must never be
+    dropped. Worked out each time and never written to the store: a nickname is
+    only ever set by `save`.
     """
-    if not real_slack_name(row):
-        return ""
     if row["nickname"]:
         return row["nickname"]
-    if _words(row["latest_export_name"]) == _words(row["slack_name"]):
-        return ""
-    return _export_fallback(row)
+    if row["latest_export_name"] and row["latest_export_name"] != row["channel_id"]:
+        return f"[{row['latest_export_name']}]"
+    return ""
+
+
+# What `list` shows in place of a Slack name for any DM without one: a 1:1 DM, or
+# a group DM nobody has named. One label for both keeps the column quiet; the
+# nickname column is what tells them apart.
+DM_LABEL = "(DM)"
+
+
+def list_slack_name(row: dict) -> str:
+    """The Slack channel name column of `list`: only a name Slack gave it.
+
+    A DM with no name worth showing is labelled as a DM, so the column never
+    suggests the name is merely unknown. A 1:1 DM is known by its D prefix as well
+    as its kind, in case an entry was recorded before its kind was.
+    """
+    if real_slack_name(row):
+        return row["slack_name"]
+    if (row["kind"] == "dm" or row["channel_id"].startswith("D")
+            or is_unnamed_group_dm(row)):
+        return DM_LABEL
+    return ""
 
 
 # The columns `list` can print, by name, each a function from one row to its text.
 COLUMNS = {
     "id": lambda row: row["channel_id"],
-    "slack_name": shown_slack_name,
-    "nickname": shown_nickname,
+    "nickname": list_nickname,
+    "slack_name": list_slack_name,
 }
-DEFAULT_COLUMNS = ("id", "slack_name")
-WITH_NICKNAMES = ("id", "slack_name", "nickname")
+DEFAULT_COLUMNS = ("id", "nickname", "slack_name")
 # The columns a search looks in. Every one of them must be on screen whenever a
-# search runs, or a line could match for a reason it does not show: list_command
-# prints WITH_NICKNAMES for any search.
-SEARCHED = WITH_NICKNAMES
+# search runs, or a line could match for a reason it does not show.
+SEARCHED = DEFAULT_COLUMNS
 
 
 # The orders `list` can print in. Each is a sort key over one row. Later keys
 # break ties, so the output never depends on the order the store happens to be in.
 SORT_KEYS = {
-    "slack_name": lambda row: (_words(shown_slack_name(row) or shown_nickname(row)),
-                               _words(shown_nickname(row)), row["channel_id"]),
+    # A conversation with no real Slack name (a DM, an unnamed group DM) sorts by
+    # its nickname column, so it lands among the channels by the name the user
+    # sees for it rather than under "(DM)".
+    "slack_name": lambda row: (_words(real_slack_name(row) or list_nickname(row)),
+                               _words(list_nickname(row)), row["channel_id"]),
 }
 DEFAULT_SORT = "slack_name"
 

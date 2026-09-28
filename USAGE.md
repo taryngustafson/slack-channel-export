@@ -276,34 +276,31 @@ If the list cannot be updated, the export itself is still complete. The command 
 slack-export list
 ```
 
-This shows each saved conversation's ID and the best available name:
+This shows each saved conversation in three columns: its ID, your nickname for it, and its Slack channel name.
 
 ```text
-D0123456789  Alex (nickname)
-C0234567890  lab-notes
-C0123456789  project-planning
-D0987654321  Sam-Lee (from export)
-C0345678901  Trip-Planning-Group (from export)
+D0123456789  Alex                   (DM)
+C0234567890  Bench Work             lab-notes
+C0123456789  -                      project-planning
+D0987654321  [Sam-Lee]              (DM)
+C0345678901  [Trip-Planning-Group]  (DM)
 ```
+
+The list is sorted by Slack channel name. A conversation without one, such as a DM, is sorted by its nickname instead.
 
 `list` is completely local. It reads the saved file only and does not contact Slack or read your Slack token, so it also works offline.
 
-### Where the names come from
+### What the columns show
 
-For a regular channel, `list` shows its Slack channel name.
-
-DMs do not have Slack channel names. An unnamed group DM technically has an internal Slack name beginning with `mpdm-`, but that is not very useful to a person, so `slack-export` does not show it as the conversation's name.
-
-When there is no useful Slack name, the list falls back to:
+The nickname column shows:
 
 | Shown as | Meaning |
 | --- | --- |
-| `Alex (nickname)` | a nickname you gave the conversation |
-| `Sam-Lee (from export)` | no nickname, so the name of its most recent export |
-| `[unnamed group DM]` | an unnamed group DM with neither a nickname nor previous export name |
-| `-` | a DM with neither |
+| `Alex` | a nickname you gave the conversation |
+| `[Sam-Lee]` | no nickname, so the name of its most recent export, in brackets |
+| `-` | no nickname, and never exported with a name |
 
-A normal Slack channel whose actual name starts with `mpdm-` is still shown normally.
+The Slack channel name column shows the name Slack gives the conversation. DMs do not have Slack channel names, so a DM shows `(DM)`. A group DM technically has an internal Slack name beginning with `mpdm-`, but that is not very useful to a person, so it also shows as `(DM)` unless someone has given the group DM a name. A normal Slack channel whose actual name starts with `mpdm-` is still shown normally.
 
 ### Search the list
 
@@ -316,8 +313,8 @@ slack-export list planning
 You can search by conversation ID or by the names shown in the list.
 
 ```text
-C0123456789  project-planning                   -
-C0345678901  Trip-Planning-Group (from export)  -
+C0123456789  -                      project-planning
+C0345678901  [Trip-Planning-Group]  (DM)
 ```
 
 For normal words, search ignores case and differences such as spaces or punctuation. For example, these both find the same name:
@@ -333,22 +330,6 @@ You can also search with part of an ID:
 
 ```sh
 slack-export list C0123
-```
-
-When you search, the output includes a third column for a nickname or a different recent export name when one is available.
-
-To show that column without searching:
-
-```sh
-slack-export list -n
-```
-
-```text
-D0123456789  Alex (nickname)                    -
-C0234567890  lab-notes                          Bench Work
-C0123456789  project-planning                   -
-D0987654321  Sam-Lee (from export)              -
-C0345678901  Trip-Planning-Group (from export)  -
 ```
 
 ### Give a conversation a nickname

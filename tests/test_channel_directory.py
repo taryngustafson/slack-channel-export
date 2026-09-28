@@ -192,14 +192,15 @@ class SearchTests(unittest.TestCase):
         # CHAN shows its own nickname, so its export name is not on the line.
         self.assertEqual(self.ids("old file"), [])
 
-    def test_unnamed_group_dm_matches_its_label_not_its_handles(self):
+    def test_dms_match_their_label_not_a_group_dms_handles(self):
         self.assertEqual(self.ids("ahandle"), [])
-        self.assertEqual(self.ids("unnamed group"), ["C0000000004"])
+        self.assertEqual(self.ids("dm"), ["C0000000004", "D0000000003"])
 
     def test_exported_unnamed_group_dm_matches_its_export_name(self):
         cd.record_export(self.store, TEAM, "Example", "C0000000004", "Group-Chat", WHEN)
         self.assertEqual(self.ids("group chat"), ["C0000000004"])
-        self.assertEqual(self.ids("unnamed group"), [])
+        # Its label stays in the Slack name column, so it still matches.
+        self.assertEqual(self.ids("dm"), ["C0000000004", "D0000000003"])
 
     def test_punctuation_only_search_does_not_match_everything(self):
         self.assertEqual(self.ids("!!!"), [])
@@ -271,90 +272,75 @@ class SortAndFormatTests(unittest.TestCase):
             cd.sort_rows(rows, by)
         cd.format_rows(rows, tuple(cd.COLUMNS))
 
-    def test_default_format_is_id_and_slack_name_aligned(self):
+    def test_format_is_id_nickname_slack_name_aligned(self):
         lines = cd.format_rows([row("C00000001", "short", "Mine"),
                                 row("C0000000002", "a-longer-name", "Also Mine")])
-        self.assertEqual(lines, ["C00000001    short",
-                                 "C0000000002  a-longer-name"])
-
-    def test_nickname_column_is_added_on_request(self):
-        lines = cd.format_rows([row("C00000001", "short", "Mine"),
-                                row("C0000000002", "a-longer-name", "Also Mine")],
-                               cd.WITH_NICKNAMES)
-        self.assertEqual(lines, ["C00000001    short          Mine",
-                                 "C0000000002  a-longer-name  Also Mine"])
+        self.assertEqual(lines, ["C00000001    Mine       short",
+                                 "C0000000002  Also Mine  a-longer-name"])
 
     def test_blank_cells_print_a_placeholder(self):
+        # No nickname and never exported; a channel not yet named by Slack.
         lines = cd.format_rows([row(CHAN, "project-planning"),
-                                row(OTHER_CHAN, "chan", "Mine")], cd.WITH_NICKNAMES)
-        self.assertEqual(lines, [f"{CHAN}  project-planning  -",
-                                 f"{OTHER_CHAN}  chan              Mine"])
+                                row(OTHER_CHAN, "", "Mine")])
+        self.assertEqual(lines, [f"{CHAN}  -     project-planning",
+                                 f"{OTHER_CHAN}  Mine  -"])
 
-    def test_no_slack_name_falls_back_to_marked_nickname(self):
-        # The nickname beats an export name: the user chose it.
-        lines = cd.format_rows([row("D0000000003", "", "Alex"),
-                                row("D0000000004", "", "Sam",
+    def test_every_dm_without_a_slack_name_shows_one_label(self):
+        # By kind, or by the D prefix for an entry recorded before its kind.
+        lines = cd.format_rows([row("D0000000003", "", "Alex", kind="dm"),
+                                row("D0000000004", "", "Sam"),
+                                row(CHAN, "mpdm-ahandle--bhandle-1", "Group",
+                                    kind="group_dm")])
+        self.assertEqual(lines, ["D0000000003  Alex   (DM)",
+                                 "D0000000004  Sam    (DM)",
+                                 f"{CHAN}  Group  (DM)"])
+
+    def test_no_nickname_falls_back_to_export_name_in_brackets(self):
+        # Shown even when it repeats the Slack name: '-' means never exported.
+        lines = cd.format_rows(
+            [row(CHAN, "project-planning", latest_export="Planning-Notes"),
+             row(OTHER_CHAN, "chan", latest_export="chan"),
+             row("D0000000003", latest_export="Some-Person")])
+        self.assertEqual(lines, [f"{CHAN}  [Planning-Notes]  project-planning",
+                                 f"{OTHER_CHAN}  [chan]            chan",
+                                 "D0000000003  [Some-Person]     (DM)"])
+
+    def test_export_named_only_by_its_id_counts_as_no_name(self):
+        lines = cd.format_rows([row(CHAN, "lab-notes", latest_export=CHAN)])
+        self.assertEqual(lines, [f"{CHAN}  -  lab-notes"])
+
+    def test_nickname_beats_export_name(self):
+        lines = cd.format_rows([row("D0000000003", "", "Alex",
                                     latest_export="Some-Person")])
-        self.assertEqual(lines, ["D0000000003  Alex (nickname)",
-                                 "D0000000004  Sam (nickname)"])
-
-    def test_nickname_in_first_column_is_not_repeated(self):
-        lines = cd.format_rows([row("D0000000003", "", "Alex")], cd.WITH_NICKNAMES)
-        self.assertEqual(lines, ["D0000000003  Alex (nickname)  -"])
+        self.assertEqual(lines, ["D0000000003  Alex  (DM)"])
 
     def test_unnamed_group_dm_is_labelled_and_named_one_is_not(self):
-        lines = cd.format_rows([row(CHAN, "mpdm-ahandle--bhandle-1", kind="group_dm"),
+        lines = cd.format_rows([row(CHAN, "mpdm-ahandle--bhandle-1", "Grant Group",
+                                    kind="group_dm"),
                                 row(OTHER_CHAN, "Named Group", kind="group_dm")])
-        self.assertEqual(lines, [f"{CHAN}  [unnamed group DM]",
-                                 f"{OTHER_CHAN}  Named Group"])
+        self.assertEqual(lines, [f"{CHAN}  Grant Group  (DM)",
+                                 f"{OTHER_CHAN}  -            Named Group"])
 
     def test_channel_named_mpdm_is_shown_as_it_is(self):
         # Only a group DM's generated name is replaced; a channel may really be
         # called this.
         for kind in ("public_channel", "private_channel"):
             with self.subTest(kind=kind):
-                lines = cd.format_rows([row(CHAN, "mpdm-roadmap", kind=kind,
-                                            latest_export="Roadmap")])
-                self.assertEqual(lines, [f"{CHAN}  mpdm-roadmap"])
+                lines = cd.format_rows([row(CHAN, "mpdm-roadmap", kind=kind)])
+                self.assertEqual(lines, [f"{CHAN}  -  mpdm-roadmap"])
 
-    def test_no_slack_name_falls_back_to_marked_export_name(self):
-        lines = cd.format_rows([row("D0000000003", latest_export="Some-Person"),
-                                row("D0000000004")])
-        self.assertEqual(lines, ["D0000000003  Some-Person (from export)",
-                                 "D0000000004  -"])
+    def test_dm_sorts_among_channels_by_its_nickname(self):
+        rows = [row(CHAN, "zebra"), row("D0000000003", "", "Morgan"),
+                row(OTHER_CHAN, "apple"), row("D0000000004", latest_export="Kim")]
+        self.assertEqual([r["channel_id"] for r in cd.sort_rows(rows)],
+                         [OTHER_CHAN, "D0000000004", "D0000000003", CHAN])
 
-    def test_nickname_column_falls_back_to_a_different_export_name(self):
-        lines = cd.format_rows(
-            [row(CHAN, "project-planning", latest_export="Planning-Notes"),
-             row(OTHER_CHAN, "chan", "Mine", latest_export="Ignored")],
-            cd.WITH_NICKNAMES)
-        self.assertEqual(lines, [f"{CHAN}  project-planning  Planning-Notes (from export)",
-                                 f"{OTHER_CHAN}  chan              Mine"])
-
-    def test_unnamed_group_dm_falls_back_like_a_dm(self):
-        # Its mpdm- name identifies no one, so it counts as no Slack name: the
-        # nickname, then the export name, then the label. Nothing is repeated
-        # in the nickname column.
-        mpdm = "mpdm-ahandle--bhandle-1"
-        lines = cd.format_rows(
-            [row("C0000000004", mpdm, "Grant Group", latest_export="Group-Chat",
-                 kind="group_dm"),
-             row("C0000000005", mpdm, latest_export="Group-Chat", kind="group_dm"),
-             row("C0000000006", mpdm, kind="group_dm")],
-            cd.WITH_NICKNAMES)
-        self.assertEqual(lines, ["C0000000004  Grant Group (nickname)    -",
-                                 "C0000000005  Group-Chat (from export)  -",
-                                 "C0000000006  [unnamed group DM]        -"])
-
-    def test_fallback_that_repeats_the_first_column_is_hidden(self):
-        # Same words, different case and hyphens: still a repeat.
-        lines = cd.format_rows(
-            [row(CHAN, "rl--abundant-trace-review",
-                 latest_export="RL-Abundant-Trace-Review"),
-             row("D0000000003", latest_export="Some-Person")],
-            cd.WITH_NICKNAMES)
-        self.assertEqual(lines, [f"{CHAN}  rl--abundant-trace-review  -",
-                                 "D0000000003  Some-Person (from export)  -"])
+    def test_unnamed_group_dm_sorts_by_its_nickname_not_its_label(self):
+        rows = [row(CHAN, "mpdm-ahandle--bhandle-1", latest_export="Apple-Group",
+                    kind="group_dm"),
+                row(OTHER_CHAN, "banana")]
+        self.assertEqual([r["channel_id"] for r in cd.sort_rows(rows)],
+                         [CHAN, OTHER_CHAN])
 
     def test_latest_export_is_the_most_recent_not_the_last_written(self):
         store = cd.empty()
@@ -507,35 +493,35 @@ class CommandTest(TempStoreTest):
 
 class ListCommandTests(CommandTest):
 
-    def test_lists_ids_and_slack_names_by_default(self):
+    def test_lists_id_nickname_and_slack_name(self):
         self.fill()
         code, out, _ = self.run_main("list")
         self.assertEqual(code, 0)
-        self.assertEqual(out, f"{OTHER_CHAN}  lab-notes\n"
-                              f"{CHAN}  project-planning\n")
+        self.assertEqual(out, f"{OTHER_CHAN}  -              lab-notes\n"
+                              f"{CHAN}  Planning Team  project-planning\n")
 
-    def test_nicknames_flag_adds_the_column(self):
+    def test_retired_nicknames_flag_is_still_accepted(self):
         self.fill()
+        _, plain, _ = self.run_main("list")
         for flag in ("-n", "--nicknames"):
             with self.subTest(flag=flag):
-                _, out, _ = self.run_main("list", flag)
-                self.assertEqual(out, f"{OTHER_CHAN}  lab-notes         -\n"
-                                      f"{CHAN}  project-planning  Planning Team\n")
+                code, out, _ = self.run_main("list", flag)
+                self.assertEqual((code, out), (0, plain))
 
-    def test_a_search_always_shows_the_nickname_that_matched(self):
+    def test_a_search_shows_the_nickname_that_matched(self):
         self.fill()
         _, out, _ = self.run_main("list", "team")
-        self.assertEqual(out, f"{CHAN}  project-planning  Planning Team\n")
+        self.assertEqual(out, f"{CHAN}  Planning Team  project-planning\n")
 
     def test_search_words_are_joined_without_quotes(self):
         self.fill()
         _, out, _ = self.run_main("list", "project", "PLAN")
-        self.assertEqual(out, f"{CHAN}  project-planning  Planning Team\n")
+        self.assertEqual(out, f"{CHAN}  Planning Team  project-planning\n")
 
     def test_search_by_id(self):
         self.fill()
         _, out, _ = self.run_main("list", OTHER_CHAN)
-        self.assertEqual(out, f"{OTHER_CHAN}  lab-notes  -\n")   # search: 3 columns
+        self.assertEqual(out, f"{OTHER_CHAN}  -  lab-notes\n")
 
     def test_no_match_exits_1_like_grep(self):
         self.fill()
@@ -663,7 +649,7 @@ class SaveCommandTests(CommandTest):
 
     def test_group_dm_kind_and_label(self):
         _, out, _ = self.run_save("C0000000004")
-        self.assertEqual(out, "C0000000004  [unnamed group DM]  (group DM)\n"
+        self.assertEqual(out, "C0000000004  (unnamed group DM)  (group DM)\n"
                               "  No nickname yet. To give it one:  "
                               "slack-export save C0000000004 <nickname>\n")
         self.assertEqual(self.stored("C0000000004")["kind"], "group_dm")

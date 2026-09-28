@@ -32,8 +32,7 @@ for giving it a nickname:
 
     slack-export save C0123456789                   # remember it
     slack-export save C0123456789 Planning Team     # ...with your own nickname
-    slack-export list                   # each ID and its Slack channel name
-    slack-export list -n                # ...plus your nicknames
+    slack-export list                   # each ID, your nickname, its Slack name
     slack-export list planning          # only those with this in an ID or a name
 """
 
@@ -654,7 +653,7 @@ def require_conversation_id(raw) -> str:
 
 
 def list_command(argv) -> None:
-    """`slack-export list [-n] [search ...]`: print saved IDs and names. Offline.
+    """`slack-export list [search ...]`: print saved IDs and names. Offline.
 
     Filter, sort and format are separate steps in channel_directory, so a later
     --sort or extra column is a new flag here and a table entry there.
@@ -663,27 +662,27 @@ def list_command(argv) -> None:
         prog="slack-export list",
         # Line breaks written out, since RawDescriptionHelpFormatter keeps them as
         # they are - it is what lets the paragraphs stay separate.
-        description="Print every saved conversation, one per line: its ID and its\n"
-                    "Slack channel name, sorted by Slack channel name.\n\n"
-                    "A 1:1 DM, or a group DM nobody has named, has no Slack channel\n"
-                    "name, so it shows your nickname for it instead, marked\n"
-                    "(nickname), or failing that the name of its most recent export,\n"
-                    "marked (from export) - names that did not come from Slack. An\n"
-                    "unnamed group DM with neither shows as [unnamed group DM].\n"
+        description="Print every saved conversation, one per line, in three\n"
+                    "columns: its ID, your nickname for it, and its Slack channel\n"
+                    "name. Sorted by Slack channel name, or by nickname for a\n"
+                    "conversation Slack gives no name, such as a 1:1 DM.\n\n"
+                    "With no nickname, the nickname column shows the name of its\n"
+                    "most recent export in [brackets] - a name you did not choose -\n"
+                    "unless that export was given no name. A DM has no Slack\n"
+                    "channel name, so it shows as (DM) - unless it is a group DM\n"
+                    "someone has named.\n"
                     "A '-' marks an empty column.\n\n"
                     "Reads only the saved list - never the Keychain or Slack.",
         formatter_class=argparse.RawDescriptionHelpFormatter)
+    # The nickname column used to be opt-in. It is always shown now, but -n is
+    # still accepted, silently, so a habit or a script that types it keeps working.
     parser.add_argument("-n", "--nicknames", action="store_true",
-                        help="add a third column: your nickname, or else the most "
-                             "recent export name, marked (from export), when it "
-                             "differs from the Slack channel name")
+                        help=argparse.SUPPRESS)
     # Every word is joined, like an export's name, so quotes are optional.
     parser.add_argument("search", nargs="*",
-                        help="show only conversations whose ID, Slack channel "
-                             "name, or nickname contains this - ignoring case, "
-                             "spaces and punctuation. Searching always adds the "
-                             "nickname column, so you can see why each line "
-                             "matched")
+                        help="show only conversations whose ID, nickname, or "
+                             "Slack channel name contains this - ignoring case, "
+                             "spaces and punctuation")
     args = parser.parse_args(argv)
     # None when no search was typed, so only that lists everything: a typed term
     # has to match, even one that is only punctuation.
@@ -697,10 +696,7 @@ def list_command(argv) -> None:
             sys.exit(f"No saved conversation matches '{term}'.")
         print("No saved conversations yet.")
         return
-    columns = (channel_directory.WITH_NICKNAMES if args.nicknames or term
-               else channel_directory.DEFAULT_COLUMNS)
-    for line in channel_directory.format_rows(channel_directory.sort_rows(rows),
-                                              columns):
+    for line in channel_directory.format_rows(channel_directory.sort_rows(rows)):
         print(line)
 
 
@@ -803,7 +799,7 @@ def main() -> None:
         usage="slack-export conversation_id [name ...] "
               "[--out DIR] [--no-threads] [--no-clipboard]\n"
               "       slack-export save conversation_id [nickname ...]\n"
-              "       slack-export list [-n] [search ...]",
+              "       slack-export list [search ...]",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     # No default, and nargs is not '?' - the target is REQUIRED. This tool never
     # enumerates the workspace or guesses what to export.
