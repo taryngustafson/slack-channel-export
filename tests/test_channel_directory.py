@@ -392,6 +392,100 @@ class ValidateTests(unittest.TestCase):
                 cd.validate(bad)
 
 
+class GroupTests(unittest.TestCase):
+    """Groups are a table of their own, beside the workspaces (D43)."""
+
+    def setUp(self):
+        self.store = cd.empty()
+        cd.set_slack_name(self.store, TEAM, "Example", CHAN, "lab-notes")
+        cd.set_slack_name(self.store, TEAM, "Example", OTHER_CHAN, "planning")
+        cd.set_slack_name(self.store, OTHER_TEAM, "Another", CHAN, "same-id-elsewhere")
+
+    def groups(self):
+        return self.store.get("groups", {})
+
+    def test_a_store_from_before_groups_has_none_and_is_valid(self):
+        self.assertNotIn("groups", self.store)
+        self.assertIs(cd.validate(self.store), self.store)
+
+    def test_create_makes_an_empty_group(self):
+        self.assertEqual(cd.create_group(self.store, "Ideas"), "created")
+        self.assertEqual(self.groups(), {"Ideas": []})
+
+    def test_creating_an_existing_group_changes_nothing(self):
+        cd.add_to_group(self.store, "Research", TEAM, CHAN)
+        before = json.dumps(self.store)
+        self.assertEqual(cd.create_group(self.store, "Research"), "exists")
+        self.assertEqual(json.dumps(self.store), before)
+
+    def test_adding_creates_the_group_if_new(self):
+        self.assertEqual(cd.add_to_group(self.store, "Research", TEAM, CHAN), "added")
+        self.assertEqual(self.groups(),
+                         {"Research": [{"workspace": TEAM, "channel": CHAN}]})
+
+    def test_adding_only_adds_never_replaces(self):
+        cd.add_to_group(self.store, "Research", TEAM, CHAN)
+        cd.add_to_group(self.store, "Research", TEAM, OTHER_CHAN)
+        self.assertEqual(self.groups()["Research"],
+                         [{"workspace": TEAM, "channel": CHAN},
+                          {"workspace": TEAM, "channel": OTHER_CHAN}])
+
+    def test_adding_a_member_twice_keeps_one(self):
+        cd.add_to_group(self.store, "Research", TEAM, CHAN)
+        self.assertEqual(cd.add_to_group(self.store, "Research", TEAM, CHAN),
+                         "already in")
+        self.assertEqual(len(self.groups()["Research"]), 1)
+
+    def test_one_conversation_in_many_groups(self):
+        for name in ("Research", "Marketing", "Ideas"):
+            cd.add_to_group(self.store, name, TEAM, CHAN)
+        self.assertEqual(sorted(self.groups()), ["Ideas", "Marketing", "Research"])
+
+    def test_a_group_can_span_workspaces(self):
+        # The same channel ID in two workspaces is two different members.
+        cd.add_to_group(self.store, "Research", TEAM, CHAN)
+        self.assertEqual(cd.add_to_group(self.store, "Research", OTHER_TEAM, CHAN),
+                         "added")
+        self.assertEqual(self.groups()["Research"],
+                         [{"workspace": TEAM, "channel": CHAN},
+                          {"workspace": OTHER_TEAM, "channel": CHAN}])
+
+    def test_names_are_exact_apart_from_outer_spaces(self):
+        cd.create_group(self.store, "tests")
+        self.assertEqual(cd.create_group(self.store, "TESTS"), "created")
+        self.assertEqual(cd.create_group(self.store, "  tests "), "exists")
+        self.assertEqual(sorted(self.groups()), ["TESTS", "tests"])
+
+    def test_an_empty_name_is_refused(self):
+        for name in ("", "   "):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                cd.create_group(self.store, name)
+        self.assertNotIn("groups", self.store)
+
+    def test_an_unsaved_conversation_is_refused_and_nothing_changes(self):
+        with self.assertRaises(cd.NotSaved) as caught:
+            cd.add_to_group(self.store, "Research", TEAM, "C0000000009")
+        self.assertEqual(caught.exception.channel_id, "C0000000009")
+        self.assertNotIn("groups", self.store)   # not even an empty group
+
+    def test_saved_in_another_workspace_is_not_saved_in_this_one(self):
+        with self.assertRaises(cd.NotSaved):
+            cd.add_to_group(self.store, "Research", OTHER_TEAM, OTHER_CHAN)
+
+    def test_a_store_with_groups_is_valid(self):
+        cd.create_group(self.store, "Ideas")
+        cd.add_to_group(self.store, "Research", TEAM, CHAN)
+        self.assertIs(cd.validate(self.store), self.store)
+
+    def test_wrong_group_shapes_are_refused(self):
+        base = {"version": 1, "workspaces": {}}
+        for bad in ([], {"Research": {}}, {"Research": ["C0000000001"]},
+                    {"Research": [{"channel": CHAN}]},
+                    {"Research": [{"workspace": TEAM, "channel": 5}]}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                cd.validate({**base, "groups": bad})
+
+
 # ── storing it ───────────────────────────────────────────────────────────────
 
 class TempStoreTest(unittest.TestCase):
@@ -462,6 +556,19 @@ class StoreFileTests(TempStoreTest):
 
 
 # ── the list command ─────────────────────────────────────────────────────────
+
+class GroupFileTests(TempStoreTest):
+
+    def test_groups_survive_a_save_and_load(self):
+        store = cd.empty()
+        cd.set_slack_name(store, TEAM, "Example", CHAN, "lab-notes")
+        cd.create_group(store, "Ideas")
+        cd.add_to_group(store, "Research", TEAM, CHAN)
+        ec.save_directory(store, self.path)
+        self.assertEqual(ec.load_directory(self.path)["groups"],
+                         {"Ideas": [],
+                          "Research": [{"workspace": TEAM, "channel": CHAN}]})
+
 
 class CommandTest(TempStoreTest):
     """Runs slack-export's main() against the temporary store. Holds no tests."""

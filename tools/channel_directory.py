@@ -40,8 +40,20 @@ a second token later adds a second group, not a new layout.
             }
           }
         }
+      },
+      "groups": {
+        "Research": [{"workspace": "T0123456789", "channel": "C0123456789"}],
+        "Ideas": []
       }
     }
+
+Groups are the user's own collections of conversations, made with `slack-export
+group`. A conversation can be in any number of groups and a group can be empty,
+so groups are not stored on the entries: they are one table of their own beside
+the workspaces, and each member names its workspace and channel, so one group can
+hold conversations from several workspaces. Group names are exact - "tests" and
+"TESTS" are two groups - unlike nicknames. A store written before groups existed
+simply has no "groups" key, which means no groups.
 
 Every field of an entry is optional, and fields this version does not know are
 kept as they are, so a later version can add one without breaking this one.
@@ -90,6 +102,15 @@ def validate(data) -> dict:
             if not isinstance(exports, dict) or not all(
                     isinstance(e, dict) for e in exports.values()):
                 raise ValueError(f"{where} has an 'exports' that is not an object")
+    groups = data.get("groups", {})
+    if not isinstance(groups, dict):
+        raise ValueError("'groups' is not an object")
+    for name, members in groups.items():
+        if not isinstance(members, list) or not all(
+                isinstance(m, dict) and isinstance(m.get("workspace"), str)
+                and isinstance(m.get("channel"), str) for m in members):
+            raise ValueError(f"group '{name}' is not a list of "
+                             f"{{workspace, channel}} members")
     return data
 
 
@@ -201,6 +222,58 @@ def record_export(data: dict, team_id: str, team_name: str, channel_id: str,
     """Note that `channel_id` was just exported to files named `stem`."""
     entry = _entry(data, team_id, team_name, channel_id)
     entry.setdefault("exports", {}).setdefault(stem, {})["last_export_utc"] = when_utc
+
+
+class NotSaved(ValueError):
+    """The conversation is not in the saved list, so it cannot join a group."""
+
+    def __init__(self, team_id: str, channel_id: str):
+        super().__init__(f"{channel_id} is not saved")
+        self.team_id = team_id
+        self.channel_id = channel_id
+
+
+def _group_name(name: str) -> str:
+    """The group name as stored: exact, apart from spaces at either end, which
+    are never meant. Case and punctuation are kept - they may be deliberate."""
+    name = name.strip()
+    if not name:
+        raise ValueError("a group name cannot be empty")
+    return name
+
+
+def create_group(data: dict, name: str) -> str:
+    """Make an empty group called `name`. Changes `data` in place.
+
+    Returns "created", or "exists" when there already is one - which is then left
+    exactly as it was, so running this twice can never lose or duplicate members.
+    """
+    name = _group_name(name)
+    groups = data.setdefault("groups", {})
+    if name in groups:
+        return "exists"
+    groups[name] = []
+    return "created"
+
+
+def add_to_group(data: dict, name: str, team_id: str, channel_id: str) -> str:
+    """Put a saved conversation in group `name`, making the group if it is new.
+    Changes `data` in place.
+
+    Returns "added", or "already in" when it was a member already - adding only
+    ever adds, never replaces. Raises NotSaved, changing nothing, when the
+    conversation is not in the saved list: a group is a list of saved
+    conversations, and `save` is what checks with Slack that an ID is real.
+    """
+    name = _group_name(name)
+    if channel_id not in data["workspaces"].get(team_id, {}).get("channels", {}):
+        raise NotSaved(team_id, channel_id)
+    members = data.setdefault("groups", {}).setdefault(name, [])
+    member = {"workspace": team_id, "channel": channel_id}
+    if member in members:
+        return "already in"
+    members.append(member)
+    return "added"
 
 
 def _words(text: str) -> str:
