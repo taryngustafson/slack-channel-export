@@ -41,6 +41,8 @@ Slack and added to it first:
 
     slack-export group Research                     # make an empty group
     slack-export group Research C0123456789 D0123456789   # add conversations to it
+    slack-export group Research --remove C0123456789      # take one out again
+    slack-export group Research --delete            # delete the group itself
     slack-export list --groups                      # your groups, with their sizes
     slack-export list --groups Research             # the conversations in one
     slack-export list --groups Research --search planning   # ...searched
@@ -755,6 +757,17 @@ def list_command(argv) -> None:
         print(line)
 
 
+def _no_such_group(store: dict, name: str) -> str:
+    """The message for a group name that does not exist, with a hint when one
+    differs only in capitalization - the likely slip, since names are exact."""
+    message = f"No group named '{name}'."
+    similar = channel_directory.similar_group_names(store, name)
+    if similar:
+        message += ("\nDid you mean " + " or ".join(f"'{s}'" for s in similar)
+                    + "? Group names are exact.")
+    return message
+
+
 def _list_groups(store: dict, names: list, term) -> None:
     """`list --groups`: every group with its size, or the members of the named
     groups, searched like `list` if a term is given."""
@@ -778,13 +791,7 @@ def _list_groups(store: dict, names: list, term) -> None:
     groups = store.get("groups", {})
     unknown = [name for name in names if name not in groups]
     if unknown:
-        lines = []
-        for name in unknown:
-            lines.append(f"No group named '{name}'.")
-            similar = channel_directory.similar_group_names(store, name)
-            if similar:
-                lines.append("Did you mean " + " or ".join(f"'{s}'" for s in similar)
-                             + "? Group names are exact.")
+        lines = [_no_such_group(store, name) for name in unknown]
         if len(names) > 1:
             lines.append("(To search within groups, use --search: "
                          "slack-export list --groups <group> --search <words>)")
@@ -917,9 +924,42 @@ def _index_from_slack(store: dict, client, auth: dict, conversation_id: str):
     return None
 
 
+def _remove_from_group(store: dict, name: str, raw_ids: list) -> None:
+    """`group NAME --remove ID ...`: take each conversation out of the group and
+    report what happened to it. Partial success: one that was not a member does
+    not undo the ones that were. Local only."""
+    removed, absent = [], []
+    for conversation_id in dict.fromkeys(parse_conversation_id(raw)
+                                         for raw in raw_ids):
+        teams = channel_directory.remove_from_group(store, name, conversation_id)
+        # Shown as `list` would show it, from the index alone; an ID the index
+        # does not know is shown bare rather than looked up in Slack.
+        rows = [r for r in channel_directory.search(store, conversation_id)
+                if r["channel_id"] == conversation_id
+                and (not teams or r["team_id"] in teams)]
+        (removed if teams else absent).append(
+            rows[0] if rows else channel_directory.bare_row(conversation_id))
+    if removed:
+        save_directory(store)
+
+    lines = channel_directory.format_rows(removed + absent)
+    sections = []
+    if removed:
+        sections.append([f"Removed from {name}:"]
+                        + [f"  {line}" for line in lines[:len(removed)]])
+    if absent:
+        sections.append([f"Not in {name}:"]
+                        + [f"  {line}" for line in lines[len(removed):]])
+    size = _count(len(store["groups"][name]))
+    sections.append([f"{name} now has {size}." if removed
+                     else f"No changes - {name} still has {size}."])
+    print("\n\n".join("\n".join(section) for section in sections))
+
+
 def group_command(argv) -> None:
     """`slack-export group NAME [ID ...]`: make a group, or add conversations to
-    one.
+    one. `--remove ID ...` takes conversations out of it; `--delete` deletes it.
+    Removing and deleting are always local.
 
     Conversations already in the conversation index are handled locally. One that
     is not is looked up in Slack, read-only, and added to the index first - so the
@@ -929,6 +969,9 @@ def group_command(argv) -> None:
     """
     parser = argparse.ArgumentParser(
         prog="slack-export group",
+        usage="slack-export group name [ID ...]\n"
+              "       slack-export group name --remove ID [ID ...]\n"
+              "       slack-export group name --delete",
         # Each paragraph wrapped on its own, so the blank lines between them
         # survive (the default formatter would run them together).
         description="\n\n".join(textwrap.fill(paragraph, 78) for paragraph in (
@@ -941,6 +984,10 @@ def group_command(argv) -> None:
             "Slack (read-only) and adds it to the conversation index before "
             "adding it to the group. Conversations Slack cannot find or access "
             "are not added.",
+            "--remove takes the given conversations out of the group; an "
+            "emptied group is kept. --delete deletes the group itself. Neither "
+            "removes anything from the conversation index, and both work without "
+            "Slack.",
             "Group names are exact: 'Research' and 'research' are two groups. "
             "Put a name with spaces in quotes.")),
         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -948,7 +995,23 @@ def group_command(argv) -> None:
     parser.add_argument("conversations", nargs="*", metavar="ID",
                         help="conversation IDs - C... or D... - or Slack links "
                              "containing them")
-    args = parser.parse_args(argv)
+    parser.add_argument("--remove", action="store_true",
+                        help="remove these conversations from the group instead "
+                             "of adding them")
+    parser.add_argument("--delete", action="store_true",
+                        help="delete the group itself (its conversations stay in "
+                             "the conversation index)")
+    # Intermixed, so `group Research --remove C0123 D0456` parses on every Python
+    # this supports: plain parse_args on 3.9 takes the IDs' slot as filled (empty)
+    # before it reaches --remove, and then rejects the IDs.
+    args = parser.parse_intermixed_args(argv)
+    if args.remove and args.delete:
+        parser.error("use --remove or --delete, not both")
+    if args.delete and args.conversations:
+        parser.error("--delete deletes the whole group, so it takes no "
+                     "conversation IDs")
+    if args.remove and not args.conversations:
+        parser.error("--remove needs the conversation IDs to remove")
     name = args.name.strip()
     if not name:
         sys.exit("FATAL: a group name cannot be empty.")
@@ -972,6 +1035,19 @@ def group_command(argv) -> None:
 
     store = load_directory()
     existed = name in store.get("groups", {})
+    if args.remove or args.delete:
+        # Only an existing group can lose members or be deleted; neither ever
+        # creates one, and neither needs the Keychain or Slack.
+        if not existed:
+            sys.exit(_no_such_group(store, name))
+        if args.delete:
+            size = channel_directory.delete_group(store, name)
+            save_directory(store)
+            print(f"Deleted group {name}" + (f" ({_count(size)})." if size else ".")
+                  + "\nIts conversations are still in your conversation index.")
+        else:
+            _remove_from_group(store, name, args.conversations)
+        return
 
     if not args.conversations:
         if channel_directory.create_group(store, name) == "exists":
@@ -1082,7 +1158,9 @@ def main() -> None:
               "       slack-export save conversation_id [nickname ...]\n"
               "       slack-export list [search ...]\n"
               "       slack-export list --groups [group ...] [--search word ...]\n"
-              "       slack-export group name [ID ...]",
+              "       slack-export group name [ID ...]\n"
+              "       slack-export group name --remove ID [ID ...]\n"
+              "       slack-export group name --delete",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     # No default, and nargs is not '?' - the target is REQUIRED. This tool never
     # enumerates the workspace or guesses what to export.

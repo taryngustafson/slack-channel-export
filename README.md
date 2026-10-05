@@ -186,6 +186,8 @@ slack-export list --groups
 slack-export list --groups Research
 ```
 
+`slack-export group Research --remove C0123456789` takes a conversation out of a group, and `slack-export group Research --delete` deletes the group. Neither removes anything from your conversation index.
+
 For more about the conversation index, groups, re-running existing exports, and other options, see **[USAGE.md](USAGE.md)**.
 
 ## What gets saved

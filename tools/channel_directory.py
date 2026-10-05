@@ -276,6 +276,35 @@ def add_to_group(data: dict, name: str, team_id: str, channel_id: str) -> str:
     return "added"
 
 
+def remove_from_group(data: dict, name: str, channel_id: str) -> list:
+    """Take `channel_id` out of group `name`. Changes `data` in place.
+
+    Returns the team IDs it was removed for - usually one, none if it was not a
+    member. Matched by channel ID alone, since that is all a person types; the
+    rare same ID from two workspaces both in the group are both removed. Only the
+    group changes: the conversation stays in the conversation index and in any
+    other group. An emptied group is kept - only deleting removes a group.
+    """
+    members = data["groups"][name]
+    removed = [m["workspace"] for m in members if m["channel"] == channel_id]
+    members[:] = [m for m in members if m["channel"] != channel_id]
+    return removed
+
+
+def delete_group(data: dict, name: str) -> int:
+    """Delete group `name` and return how many conversations it had. Changes
+    `data` in place. The conversations themselves stay in the conversation index."""
+    return len(data["groups"].pop(name))
+
+
+def bare_row(channel_id: str) -> dict:
+    """A row shaped like search's for an ID with nothing in the conversation
+    index, so it prints in the same columns, blank but for what the ID shows."""
+    return {"team_id": "", "team_name": "", "channel_id": channel_id,
+            "nickname": "", "slack_name": "", "kind": "", "export_names": [],
+            "latest_export_name": "", "last_export_utc": ""}
+
+
 def saved_in(data: dict, channel_id: str) -> list:
     """The team IDs of every workspace where `channel_id` is saved, sorted.
 

@@ -481,6 +481,58 @@ A conversation ID in the name's place, such as `slack-export group C0123456789`,
 
 Groups are not shown by plain `slack-export list`, and are stored in the conversation index file alongside everything else.
 
+### Remove conversations from a group
+
+Add `--remove` before the conversations to take out:
+
+```sh
+slack-export group Research --remove D0987654321 C0234567890
+```
+
+```text
+Removed from Research:
+  D0987654321  -  (DM)
+
+Not in Research:
+  C0234567890  -  lab-notes
+
+Research now has 2 conversations.
+```
+
+This only takes them out of that group. They stay in your conversation index, in any other groups they belong to, and their exported files are untouched. Conversations that were not in the group are listed but change nothing, and the ones that were removed stay removed.
+
+Removing the last conversation leaves the group in place, empty:
+
+```text
+$ slack-export group "Lab Notes" --remove C0123456789
+Removed from Lab Notes:
+  C0123456789  -  project-planning
+
+Lab Notes now has 0 conversations.
+```
+
+### Delete a group
+
+```sh
+slack-export group Research --delete
+```
+
+```text
+Deleted group Research (2 conversations).
+Its conversations are still in your conversation index.
+```
+
+This deletes only the group. Its conversations stay in your conversation index with their nicknames, they stay in any other groups, and no exported files are deleted. There is no "are you sure?" prompt: nothing else is affected, and you can make the group again with `slack-export group`.
+
+`--delete` takes no conversation IDs, and `--remove` and `--delete` cannot be used together.
+
+Both `--remove` and `--delete` work entirely from your conversation index: they never contact Slack or read your Slack token. They only work on a group that exists, and group names are exact, so a name that differs only in capitalization gets a hint instead:
+
+```text
+No group named 'research'.
+Did you mean 'Research'? Group names are exact.
+```
+
 ### Browse your groups
 
 To see all your groups, and how many conversations each has:
@@ -747,7 +799,7 @@ Something after the group's name is not a conversation ID or Slack link. Most of
 
 ### `No group named '...'`
 
-`slack-export list --groups` was given a name that is not one of your groups. Group names are exact, including capitalization; if one differs only in capitalization, the message suggests it. `slack-export list --groups` on its own lists every group you have.
+`slack-export list --groups`, `group --remove` or `group --delete` was given a name that is not one of your groups. Group names are exact, including capitalization; if one differs only in capitalization, the message suggests it. `slack-export list --groups` on its own lists every group you have.
 
 ### `the nickname '...' is already used by`
 

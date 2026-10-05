@@ -1128,6 +1128,200 @@ class GroupCommandTests(CommandTest):
         self.assertEqual(self.path.read_text(), before)
 
 
+class GroupRemoveDeleteTests(CommandTest):
+    """`group NAME --remove ID ...` and `group NAME --delete` (D55). run_main fails
+    the test on any Keychain or Slack use, so every test here also proves the
+    command stayed local."""
+
+    DM = "D0000000003"
+
+    def setUp(self):
+        super().setUp()
+        store = cd.empty()
+        cd.set_slack_name(store, TEAM, "Example", CHAN, "project-planning")
+        cd.set_slack_name(store, TEAM, "Example", OTHER_CHAN, "lab-notes")
+        cd.set_nickname(store, TEAM, "Example", self.DM, "Alex")
+        cd.set_kind(store, TEAM, "Example", self.DM, "dm")
+        cd.record_export(store, TEAM, "Example", CHAN, "Planning", WHEN)
+        for channel in (CHAN, self.DM):
+            cd.add_to_group(store, "Research", TEAM, channel)
+        cd.add_to_group(store, "Lab Notes", TEAM, CHAN)
+        cd.create_group(store, "Ideas")
+        ec.save_directory(store, self.path)
+
+    def stored(self):
+        return json.loads(self.path.read_text())
+
+    def members(self, name="Research"):
+        return [m["channel"] for m in self.stored()["groups"][name]]
+
+    def channels(self):
+        return self.stored()["workspaces"][TEAM]["channels"]
+
+    # -- --remove -------------------------------------------------------------
+
+    def test_remove_one(self):
+        code, out, _ = self.run_main("group", "Research", "--remove", self.DM)
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "Removed from Research:\n"
+                              f"  {self.DM}  Alex  (DM)\n"
+                              "\n"
+                              "Research now has 1 conversation.\n")
+        self.assertEqual(self.members(), [CHAN])
+
+    def test_remove_several(self):
+        code, out, _ = self.run_main("group", "Research", "--remove", CHAN, self.DM)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.members(), [])
+        self.assertTrue(out.endswith("Research now has 0 conversations.\n"))
+
+    def test_remove_mixed_member_and_non_member(self):
+        code, out, _ = self.run_main("group", "Research", "--remove",
+                                     self.DM, OTHER_CHAN)
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "Removed from Research:\n"
+                              f"  {self.DM}  Alex  (DM)\n"
+                              "\n"
+                              "Not in Research:\n"
+                              f"  {OTHER_CHAN}  -     lab-notes\n"
+                              "\n"
+                              "Research now has 1 conversation.\n")
+        self.assertEqual(self.members(), [CHAN])
+
+    def test_remove_nothing_that_is_a_member_changes_nothing(self):
+        before = self.path.read_text()
+        code, out, _ = self.run_main("group", "Research", "--remove", OTHER_CHAN)
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "Not in Research:\n"
+                              f"  {OTHER_CHAN}  -  lab-notes\n"
+                              "\n"
+                              "No changes - Research still has 2 conversations.\n")
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_an_unindexed_id_is_shown_bare_not_looked_up(self):
+        code, out, _ = self.run_main("group", "Research", "--remove", "C0000000009")
+        self.assertEqual(code, 0)
+        self.assertIn("Not in Research:\n  C0000000009  -  -\n", out)
+
+    def test_removing_the_last_member_keeps_the_empty_group(self):
+        self.run_main("group", "Lab Notes", "--remove", CHAN)
+        self.assertEqual(self.stored()["groups"]["Lab Notes"], [])
+        _, out, _ = self.run_main("list", "--groups")
+        self.assertIn("Lab Notes  0", out)
+
+    def test_removed_conversation_stays_in_the_index_and_its_exports(self):
+        before = self.channels()[CHAN]
+        self.run_main("group", "Research", "--remove", CHAN)
+        self.assertEqual(self.channels()[CHAN], before)
+        self.assertEqual(before["exports"], {"Planning": {"last_export_utc": WHEN}})
+
+    def test_removed_conversation_stays_in_other_groups(self):
+        self.run_main("group", "Research", "--remove", CHAN)
+        self.assertEqual(self.members("Lab Notes"), [CHAN])
+
+    def test_remove_accepts_slack_links(self):
+        link = f"https://example.slack.com/archives/{self.DM}"
+        code, _, _ = self.run_main("group", "Research", "--remove", link)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.members(), [CHAN])
+
+    def test_remove_with_malformed_input_changes_nothing(self):
+        before = self.path.read_text()
+        code, _, err = self.run_main("group", "Research", "--remove", self.DM, "Notes")
+        self.assertEqual(code, 1)
+        self.assertIn("Notes is not a conversation ID", err)
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_remove_from_an_unknown_group_errors_and_creates_nothing(self):
+        before = self.path.read_text()
+        code, out, err = self.run_main("group", "Nope", "--remove", CHAN)
+        self.assertEqual((code, out), (1, ""))
+        self.assertEqual(err, "No group named 'Nope'.")
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_remove_hints_at_a_case_only_match(self):
+        code, _, err = self.run_main("group", "research", "--remove", CHAN)
+        self.assertEqual(code, 1)
+        self.assertEqual(err, "No group named 'research'.\n"
+                              "Did you mean 'Research'? Group names are exact.")
+
+    def test_remove_from_a_name_with_spaces(self):
+        code, _, _ = self.run_main("group", "Lab Notes", "--remove", CHAN)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.members("Lab Notes"), [])
+
+    def test_remove_works_wherever_the_flag_is_typed(self):
+        # Intermixed parsing: on Python 3.9, plain parse_args rejects this.
+        code, _, _ = self.run_main("group", "Research", CHAN, "--remove", self.DM)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.members(), [])
+
+    # -- --delete -------------------------------------------------------------
+
+    def test_delete_a_populated_group(self):
+        code, out, _ = self.run_main("group", "Research", "--delete")
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "Deleted group Research (2 conversations).\n"
+                              "Its conversations are still in your conversation "
+                              "index.\n")
+        self.assertNotIn("Research", self.stored()["groups"])
+
+    def test_delete_an_empty_group(self):
+        code, out, _ = self.run_main("group", "Ideas", "--delete")
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "Deleted group Ideas.\n"
+                              "Its conversations are still in your conversation "
+                              "index.\n")
+
+    def test_deleted_groups_conversations_stay_in_the_index(self):
+        before = self.channels()
+        self.run_main("group", "Research", "--delete")
+        self.assertEqual(self.channels(), before)
+
+    def test_delete_leaves_other_groups_alone(self):
+        self.run_main("group", "Research", "--delete")
+        self.assertEqual(self.stored()["groups"],
+                         {"Lab Notes": [{"workspace": TEAM, "channel": CHAN}],
+                          "Ideas": []})
+
+    def test_delete_an_unknown_group_errors(self):
+        before = self.path.read_text()
+        code, _, err = self.run_main("group", "Nope", "--delete")
+        self.assertEqual(code, 1)
+        self.assertEqual(err, "No group named 'Nope'.")
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_delete_hints_at_a_case_only_match(self):
+        code, _, err = self.run_main("group", "RESEARCH", "--delete")
+        self.assertEqual(code, 1)
+        self.assertIn("Did you mean 'Research'?", err)
+        self.assertIn("Research", self.stored()["groups"])
+
+    def test_delete_a_name_with_spaces(self):
+        code, _, _ = self.run_main("group", "Lab Notes", "--delete")
+        self.assertEqual(code, 0)
+        self.assertNotIn("Lab Notes", self.stored()["groups"])
+
+    # -- refused combinations -------------------------------------------------
+
+    def test_delete_with_ids_is_refused(self):
+        code, _, err = self.run_main("group", "Research", "--delete", CHAN)
+        self.assertEqual(code, 2)
+        self.assertIn("--delete deletes the whole group", err)
+        self.assertIn("Research", self.stored()["groups"])
+
+    def test_remove_and_delete_together_is_refused(self):
+        code, _, err = self.run_main("group", "Research", "--remove", CHAN, "--delete")
+        self.assertEqual(code, 2)
+        self.assertIn("not both", err)
+        self.assertEqual(self.members(), [CHAN, self.DM])
+
+    def test_remove_without_ids_is_refused(self):
+        code, _, err = self.run_main("group", "Research", "--remove")
+        self.assertEqual(code, 2)
+        self.assertIn("--remove needs the conversation IDs", err)
+
+
 class SaveCommandTests(CommandTest):
 
     CONVERSATIONS = {
