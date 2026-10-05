@@ -35,8 +35,9 @@ exporting it, or for giving it a nickname:
     slack-export list                   # each ID, your nickname, its Slack name
     slack-export list planning          # only those with this in an ID or a name
 
-Groups collect saved conversations under a name of your choosing. A conversation can
-be in any number of groups, or none:
+Groups collect conversations under a name of your choosing. A conversation can be in
+any number of groups, or none. One not yet in the conversation index is looked up in
+Slack and added to it first:
 
     slack-export group Research                     # make an empty group
     slack-export group Research C0123456789 D0123456789   # add conversations to it

@@ -171,7 +171,15 @@ slack-export save D0123456789 Alex
 
 You can also use `save` to remember a conversation without exporting it first.
 
-For more about the conversation index, re-running existing exports, and other options, see **[USAGE.md](USAGE.md)**.
+You can collect conversations into groups of your own, such as one per project:
+
+```sh
+slack-export group Research C0123456789 D0123456789
+```
+
+A conversation can be in any number of groups, or none. If a conversation is not in your conversation index yet, `group` looks it up in Slack and adds it to the index first.
+
+For more about the conversation index, groups, re-running existing exports, and other options, see **[USAGE.md](USAGE.md)**.
 
 ## What gets saved
 
@@ -185,7 +193,7 @@ Each export has three parts:
 
 The Markdown version is what gets copied to your clipboard.
 
-The conversation index is kept separately at `~/.config/slack-export/channels.json`. It stores the information needed to find conversations again, such as conversation and workspace IDs/names, nicknames, conversation type, and export names/times. It does **not** contain Slack message text or attachments.
+The conversation index is kept separately at `~/.config/slack-export/channels.json`. It stores the information needed to find conversations again, such as conversation and workspace IDs/names, nicknames, conversation type, export names/times, and your groups. It does **not** contain Slack message text or attachments.
 
 Example text output:
 
@@ -260,7 +268,7 @@ It uses:
 ## Documentation
 
 * **[SLACK-SETUP.md](SLACK-SETUP.md)** — one-time Slack app and token setup
-* **[USAGE.md](USAGE.md)** — detailed day-to-day usage, options, incremental updates, the conversation index, and troubleshooting
+* **[USAGE.md](USAGE.md)** — detailed day-to-day usage, options, incremental updates, the conversation index, groups, and troubleshooting
 
 ## License
 

@@ -260,7 +260,7 @@ for one channel and try to use `Team Notes` for another channel, the exporter re
 
 ## Find a conversation again
 
-Conversation IDs are not very memorable, so `slack-export` keeps a conversation index: a list of conversations you have exported or saved.
+Conversation IDs are not very memorable, so `slack-export` keeps a conversation index: a list of conversations you have exported, saved, or added to a group.
 
 After an export, the last lines show whether the conversation index was updated:
 
@@ -377,12 +377,97 @@ The file stores lookup information such as:
 - your nicknames
 - workspace ID/name
 - export names and times
+- your groups, and which conversations are in each
 
 It does **not** contain Slack message text or attachments.
 
 The folder and file are created with owner-only permissions.
 
 The conversation index normally lives outside the `slack-channel-export` project. If its location is inside another Git repository — for example, because you keep `~/.config` in a dotfiles repo — `slack-export` checks whether Git could track `channels.json` and refuses to write it unless that file is ignored.
+
+## Group conversations
+
+A group is your own named collection of conversations — for example, everything related to one project. Groups are optional: a conversation can be in any number of groups, or none.
+
+### Make a group
+
+```sh
+slack-export group Research
+```
+
+```text
+Created group Research (empty).
+```
+
+Making a group that already exists changes nothing.
+
+### Add conversations to a group
+
+Put one or more conversation IDs or Slack links after the group's name:
+
+```sh
+slack-export group Research C0123456789 D0123456789
+```
+
+```text
+Added to Research:
+  C0123456789  -     project-planning
+  D0123456789  Alex  (DM)
+
+Research now has 2 conversations.
+```
+
+If the group does not exist yet, it is created first, so you do not need to make it separately.
+
+Adding never removes anything. Run the command again with more IDs to add more conversations to the same group:
+
+```sh
+slack-export group Research D0987654321 D0123456789 C0999999999
+```
+
+```text
+Added to Research:
+  D0987654321  -     (DM)
+
+Already in Research:
+  D0123456789  Alex  (DM)
+
+Could not add:
+  C0999999999  conversation not found or not accessible
+
+Research now has 3 conversations.
+```
+
+Each conversation is reported once, under what happened to it. Conversations that could be added stay added even when others could not.
+
+### Conversations not yet in your conversation index
+
+A conversation does not need to be saved or exported before you add it to a group.
+
+- If it is **already in your conversation index**, `group` works entirely locally. It does not read your Slack token or contact Slack.
+- If it is **not in your conversation index yet**, `group` looks it up in Slack, read-only, adds it to the conversation index, and then adds it to the group. It is added without a nickname; to give it one, use `slack-export save <ID> <nickname>`.
+- If Slack **cannot find or access it**, it is added to neither the conversation index nor the group, and appears under `Could not add`. See [`channel_not_found`](#channel_not_found) for common causes. "Not accessible" can also mean the conversation exists but the saved token cannot see it.
+
+### Group names
+
+Group names are exact: `Research` and `research` are two different groups.
+
+A name with spaces needs quotes:
+
+```sh
+slack-export group "Lab Notes" C0123456789
+```
+
+Without the quotes, `slack-export` would read `Lab` as the group's name and `Notes` as a conversation. Because `Notes` is not a conversation ID, the whole command is cancelled before anything changes:
+
+```text
+Nothing was changed: Notes is not a conversation ID.
+A group name with spaces needs quotes: slack-export group "Lab Notes" C0123456789
+```
+
+A conversation ID in the name's place, such as `slack-export group C0123456789`, is refused, so a group is never accidentally named after a conversation.
+
+Groups are not shown by `slack-export list`, and are stored in the conversation index file alongside everything else.
 
 ## Options
 
@@ -559,6 +644,14 @@ mv ~/.config/slack-export/channels.json ~/.config/slack-export/channels.json.old
 ### `refusing to save channel names to ~/.config/slack-export/channels.json`
 
 The conversation index is inside a Git repository that does not ignore it, so its names and IDs could be committed. Add `channels.json` to that repository's `.gitignore`.
+
+### `conversation not found or not accessible`
+
+`slack-export group` asked Slack about a conversation that is not in your conversation index, and Slack could not return it. It was not added anywhere. The causes are the same as for [`channel_not_found`](#channel_not_found).
+
+### `Nothing was changed: ... is not a conversation ID`
+
+Something after the group's name is not a conversation ID or Slack link. Most often, a group name with a space was typed without quotes. Nothing was changed; put the name in quotes and run the command again.
 
 ### `the nickname '...' is already used by`
 
