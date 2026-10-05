@@ -58,8 +58,9 @@ simply has no "groups" key, which means no groups.
 Every field of an entry is optional, and fields this version does not know are
 kept as they are, so a later version can add one without breaking this one.
 
-The store holds real channel names and IDs, so it lives outside every repository,
-and none of it is ever written into an export.
+The store holds real channel names and IDs, so it normally lives outside the project
+repository, and the writer refuses to save it anywhere Git could track it. None of it
+is ever written into an export.
 """
 
 import re

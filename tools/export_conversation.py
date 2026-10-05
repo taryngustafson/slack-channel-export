@@ -27,8 +27,8 @@ conversation named on the command line - it never enumerates the workspace.
     slack-export C0123456789                        # again later: append what is new
 
 The conversation index remembers conversations, so an ID can be found again without
-going back to Slack. Every export adds itself to it; `save` is for adding one without
-exporting it, or for giving it a nickname:
+going back to Slack. After an export, slack-export also updates the conversation
+index; `save` is for adding one without exporting it, or for giving it a nickname:
 
     slack-export save C0123456789                   # remember it
     slack-export save C0123456789 Planning Team     # ...with your own nickname
