@@ -17,7 +17,7 @@ This version of the tool is written for macOS.
 It uses:
 
 * macOS Keychain to store the Slack token
-* `pbcopy` to put exported Markdown on your clipboard
+* `pbcopy` to put exported Markdown on your clipboard, when you ask with `--copy`
 
 ### Workspace approval
 

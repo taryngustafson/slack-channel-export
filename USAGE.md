@@ -77,13 +77,17 @@ Press Return.
 
 The exporter prints its progress while it works. Large conversations with many threads can take longer because thread replies have to be fetched separately.
 
-### 3. Paste
+### 3. Use the files
 
-When the export finishes, the Markdown version of the conversation is already on your clipboard.
+When the export finishes, the `.txt` and `.md` files are saved locally, ready to open or share.
 
-Just paste it wherever you need it.
+To also copy the Markdown version to your clipboard, add `--copy`:
 
-The files are also saved locally so you can use them again later.
+```sh
+slack-export C0123456789 --copy
+```
+
+The clipboard is left alone unless you ask, because a long conversation pasted by surprise can flood or freeze whatever it is pasted into.
 
 ## Give the export a name
 
@@ -165,7 +169,7 @@ This contains the same conversation as Markdown.
 
 Each message includes a permalink back to the original Slack message.
 
-This is the version copied to your clipboard.
+This is the version `--copy` copies to your clipboard.
 
 ### `.raw.json`
 
@@ -199,7 +203,7 @@ If that command created the export previously, running it again updates those sa
 
 The exporter checks the raw archive, downloads the new material, and appends it to the existing export.
 
-Your clipboard contains **only the newly fetched messages**.
+With `--copy`, only **the newly fetched messages** are copied.
 
 A new section looks like:
 
@@ -499,19 +503,21 @@ Before anything is downloaded, the exporter also checks whether the destination 
 
 This is intended to prevent private Slack conversations from being committed accidentally.
 
-### Leave the clipboard alone
+### Copy to the clipboard
 
 ```sh
-slack-export C0123456789 --no-clipboard
+slack-export C0123456789 --copy
 ```
 
-The files are still created, but your current clipboard contents are preserved.
+The files are created as usual, and the Markdown version is also copied to your clipboard. Without `--copy`, your clipboard is not touched.
 
 You can combine this with a name:
 
 ```sh
-slack-export C0123456789 Project Planning --no-clipboard
+slack-export C0123456789 Project Planning --copy
 ```
+
+`--no-clipboard`, from earlier versions where copying was automatic, is still accepted and does nothing extra.
 
 ### Skip thread replies
 

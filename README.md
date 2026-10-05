@@ -6,7 +6,7 @@ Export a Slack channel or DM, including all thread replies, to readable text and
 
 * downloads the conversation in chronological order
 * expands thread replies
-* copies the Markdown version to your clipboard
+* can copy the Markdown version to your clipboard, if you ask
 * saves readable `.txt` and `.md` files
 * keeps a raw archive so later runs only fetch what is new
 
@@ -26,7 +26,7 @@ Or give the export a readable name:
 slack-export C0123456789 Project Planning
 ```
 
-When it finishes, the Markdown version is already on your clipboard.
+Add `--copy` if you also want the Markdown version copied to your clipboard. Without it, your clipboard is left alone.
 
 Your saved exports are in:
 
@@ -120,10 +120,10 @@ If you do not provide a name, the conversation ID is used instead.
 ### Common options
 
 ```sh
-slack-export C0123456789 --no-clipboard
+slack-export C0123456789 --copy
 ```
 
-Write the files without replacing your clipboard.
+Also copy the Markdown version to your clipboard. Without `--copy`, your clipboard is not touched.
 
 ```sh
 slack-export C0123456789 --no-threads
@@ -140,7 +140,7 @@ Put the readable `.txt` and `.md` files in another folder.
 Options can be combined with a name:
 
 ```sh
-slack-export C0123456789 Project Planning --no-clipboard
+slack-export C0123456789 Project Planning --copy
 ```
 
 ### Find a conversation again
@@ -191,7 +191,7 @@ Each export has three parts:
 | `.md`       | `exports/`     | Markdown version with Slack permalinks                       |
 | `.raw.json` | `exports/raw/` | Raw Slack data used for incremental updates and re-rendering |
 
-The Markdown version is what gets copied to your clipboard.
+The Markdown version is what `--copy` copies to your clipboard.
 
 The conversation index is kept separately at `~/.config/slack-export/channels.json`. It stores the information needed to find conversations again, such as conversation and workspace IDs/names, nicknames, conversation type, export names/times, and your groups. It does **not** contain Slack message text or attachments.
 
@@ -234,7 +234,7 @@ slack-export C0123456789 Project Planning
 
 The exporter checks the existing raw archive, downloads what has appeared since the previous run, and appends only the new material.
 
-Your clipboard contains only the newly fetched messages.
+With `--copy`, only the newly fetched messages are copied.
 
 The existing exported text is not rewritten. If an older Slack message has since been edited, your previous export keeps the version that was captured at the time.
 

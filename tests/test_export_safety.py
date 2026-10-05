@@ -15,6 +15,7 @@ and no real shell startup file is ever touched.
 import io
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -280,6 +281,17 @@ class ExporterOrderTests(TempDirTest):
         self.assertIn("no Keychain entry", result.stderr)
         self.assertTrue(self.marker.exists())
 
+    def test_copy_and_the_old_no_clipboard_are_both_accepted(self):
+        # --copy is new; --no-clipboard was the old opt-out and must still parse,
+        # so a habit or script that types it keeps working.
+        for flag in ("--copy", "--no-clipboard"):
+            with self.subTest(flag=flag):
+                result = self.run_exporter(flag)
+                self.assertIn("no Keychain entry", result.stderr)
+                self.assertNotIn("unrecognized arguments", result.stderr)
+                self.marker.unlink()
+                shutil.rmtree(self.tmp / "bin")
+
     def test_a_rejected_token_ends_with_a_message_not_a_traceback(self):
         """The real command, end to end, with Slack stubbed out entirely.
 
@@ -328,6 +340,27 @@ class ExporterOrderTests(TempDirTest):
         self.assertIn("SLACK-SETUP.md", output)
         self.assertNotIn("Traceback", output)
         self.assertTrue(self.marker.exists(), "it should get as far as the Keychain")
+
+
+class ClipboardTests(unittest.TestCase):
+    """Copying is opt-in: a long export pasted by surprise can freeze an app."""
+
+    def test_nothing_is_copied_unless_asked(self):
+        with mock.patch.object(ec.subprocess, "run") as run:
+            self.assertFalse(ec.copy_to_clipboard("# a long export", False))
+        run.assert_not_called()
+
+    def test_copied_when_asked(self):
+        with mock.patch.object(ec.subprocess, "run") as run:
+            run.return_value.returncode = 0
+            self.assertTrue(ec.copy_to_clipboard("# a long export", True))
+        self.assertEqual(run.call_args.args[0], ["pbcopy"])
+        self.assertEqual(run.call_args.kwargs["input"], "# a long export")
+
+    def test_nothing_to_copy_is_not_copied(self):
+        with mock.patch.object(ec.subprocess, "run") as run:
+            self.assertFalse(ec.copy_to_clipboard(None, True))
+        run.assert_not_called()
 
 
 # ── file permissions ─────────────────────────────────────────────────────────
