@@ -287,6 +287,35 @@ def saved_in(data: dict, channel_id: str) -> list:
                   if channel_id in workspace["channels"])
 
 
+def group_sizes(data: dict) -> list:
+    """Every group as (name, number of conversations), sorted alphabetically.
+
+    Names are exact, so "tests" and "TESTS" are two groups; they sort next to each
+    other, ignoring case first and then by the exact name so the order is fixed.
+    """
+    return sorted(((name, len(members))
+                   for name, members in data.get("groups", {}).items()),
+                  key=lambda pair: (pair[0].casefold(), pair[0]))
+
+
+def group_members(data: dict, names) -> set:
+    """The (team ID, channel ID) of every conversation in any of the named groups.
+
+    A set, so a conversation in more than one of them counts once. Unknown names
+    are the caller's to report; here they contribute nothing.
+    """
+    groups = data.get("groups", {})
+    return {(m["workspace"], m["channel"])
+            for name in names for m in groups.get(name, [])}
+
+
+def similar_group_names(data: dict, name: str) -> list:
+    """Existing group names that differ from `name` only in case - the likely slip,
+    since names are exact."""
+    return sorted(other for other in data.get("groups", {})
+                  if other != name and other.casefold() == name.casefold())
+
+
 def _words(text: str) -> str:
     """Text reduced to lower-case words separated by single spaces.
 
@@ -476,6 +505,9 @@ COLUMNS = {
     "id": lambda row: row["channel_id"],
     "nickname": list_nickname,
     "slack_name": list_slack_name,
+    # Only `list --groups` with several names fills this in: which of them the
+    # conversation is in. Blank on any other row.
+    "groups": lambda row: row.get("groups", ""),
 }
 DEFAULT_COLUMNS = ("id", "nickname", "slack_name")
 # The columns a search looks in. Every one of them must be on screen whenever a
@@ -511,6 +543,7 @@ HEADERS = {
     "id": "ID",
     "nickname": "NICKNAME",
     "slack_name": "SLACK NAME",
+    "groups": "GROUPS",
 }
 
 
@@ -525,8 +558,17 @@ def format_rows(rows: list, columns=DEFAULT_COLUMNS, header: bool = False) -> li
     cells = [[COLUMNS[column](row) or BLANK for column in columns] for row in rows]
     if header:
         cells.insert(0, [HEADERS[column] for column in columns])
-    widths = [max((len(line[i]) for line in cells), default=0)
-              for i in range(len(columns))]
+    return align(cells)
+
+
+def align(cells: list) -> list:
+    """Lines of text from rows of cells: every column but the last padded to its
+    widest cell, two spaces between columns, no trailing spaces. Shared by every
+    table the tool prints, so they all line up the same way."""
+    if not cells:
+        return []
+    columns = len(cells[0])
+    widths = [max(len(line[i]) for line in cells) for i in range(columns)]
     return ["  ".join([cell.ljust(width) for cell, width in zip(line[:-1], widths)]
                       + line[-1:])
             for line in cells]

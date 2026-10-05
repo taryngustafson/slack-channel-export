@@ -557,6 +557,40 @@ class StoreFileTests(TempStoreTest):
 
 # ── the list command ─────────────────────────────────────────────────────────
 
+class GroupBrowseTests(unittest.TestCase):
+    """The helpers behind `list --groups`."""
+
+    def setUp(self):
+        self.store = cd.empty()
+        for channel in (CHAN, OTHER_CHAN):
+            cd.set_slack_name(self.store, TEAM, "Example", channel, channel.lower())
+        cd.add_to_group(self.store, "Research", TEAM, CHAN)
+        cd.add_to_group(self.store, "Research", TEAM, OTHER_CHAN)
+        cd.add_to_group(self.store, "Work", TEAM, CHAN)
+        cd.create_group(self.store, "ideas")
+
+    def test_sizes_are_counted_and_sorted_ignoring_case(self):
+        self.assertEqual(cd.group_sizes(self.store),
+                         [("ideas", 0), ("Research", 2), ("Work", 1)])
+
+    def test_case_twins_sort_next_to_each_other_in_a_fixed_order(self):
+        cd.create_group(self.store, "IDEAS")
+        self.assertEqual([n for n, _ in cd.group_sizes(self.store)][:2],
+                         ["IDEAS", "ideas"])
+
+    def test_no_groups_key_means_no_groups(self):
+        self.assertEqual(cd.group_sizes(cd.empty()), [])
+
+    def test_members_of_several_groups_count_once(self):
+        self.assertEqual(cd.group_members(self.store, ["Research", "Work"]),
+                         {(TEAM, CHAN), (TEAM, OTHER_CHAN)})
+
+    def test_similar_names_differ_only_in_case(self):
+        self.assertEqual(cd.similar_group_names(self.store, "research"), ["Research"])
+        self.assertEqual(cd.similar_group_names(self.store, "Research"), [])
+        self.assertEqual(cd.similar_group_names(self.store, "Reserch"), [])
+
+
 class GroupFileTests(TempStoreTest):
 
     def test_groups_survive_a_save_and_load(self):
@@ -674,6 +708,171 @@ class ListCommandTests(CommandTest):
 
 GOOD_SCOPES = ("identify,channels:history,channels:read,groups:history,groups:read,"
                "im:history,im:read,mpim:history,mpim:read,users:read")
+
+
+class ListGroupsCommandTests(CommandTest):
+    """`list --groups` and `list --search`. run_main fails the test on any Keychain
+    or Slack use, so every test here also proves the command stayed offline."""
+
+    def fill_groups(self):
+        store = cd.empty()
+        cd.set_slack_name(store, TEAM, "Example", CHAN, "project-planning")
+        cd.set_nickname(store, TEAM, "Example", CHAN, "Planning Team")
+        cd.set_slack_name(store, TEAM, "Example", OTHER_CHAN, "lab-notes")
+        cd.set_nickname(store, TEAM, "Example", "D0000000003", "Alex")
+        cd.set_kind(store, TEAM, "Example", "D0000000003", "dm")
+        for channel in (CHAN, OTHER_CHAN, "D0000000003"):
+            cd.add_to_group(store, "Research", TEAM, channel)
+        cd.add_to_group(store, "Work", TEAM, CHAN)
+        cd.add_to_group(store, "Lab Notes", TEAM, OTHER_CHAN)
+        cd.create_group(store, "Ideas")
+        ec.save_directory(store, self.path)
+
+    def test_all_groups_sorted_with_counts(self):
+        self.fill_groups()
+        code, out, _ = self.run_main("list", "--groups")
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "GROUP      CONVERSATIONS\n"
+                              "Ideas      0\n"
+                              "Lab Notes  1\n"
+                              "Research   3\n"
+                              "Work       1\n")
+
+    def test_no_groups_says_how_to_make_one(self):
+        self.fill()
+        code, out, _ = self.run_main("list", "--groups")
+        self.assertEqual((code, out), (0, "You have no groups yet.\n"
+                                          "To make one: slack-export group <name>\n"))
+
+    def test_one_groups_members_use_lists_table_and_order(self):
+        self.fill_groups()
+        code, out, _ = self.run_main("list", "--groups", "Research")
+        self.assertEqual(code, 0)
+        # The same lines plain `list` prints for these three, in the same order.
+        _, everything, _ = self.run_main("list")
+        self.assertEqual(out, everything)
+        self.assertEqual(out, "ID           NICKNAME       SLACK NAME\n"
+                              "D0000000003  Alex           (DM)\n"
+                              f"{OTHER_CHAN}  -              lab-notes\n"
+                              f"{CHAN}  Planning Team  project-planning\n")
+
+    def test_members_only_from_the_named_group(self):
+        self.fill_groups()
+        _, out, _ = self.run_main("list", "--groups", "Work")
+        self.assertEqual(out, "ID           NICKNAME       SLACK NAME\n"
+                              f"{CHAN}  Planning Team  project-planning\n")
+
+    def test_a_name_with_spaces_works_when_quoted(self):
+        self.fill_groups()
+        code, out, _ = self.run_main("list", "--groups", "Lab Notes")
+        self.assertEqual(code, 0)
+        self.assertIn(OTHER_CHAN, out)
+
+    def test_several_groups_list_each_member_once(self):
+        self.fill_groups()
+        code, out, _ = self.run_main("list", "--groups", "Work", "Research")
+        self.assertEqual(code, 0)
+        self.assertEqual(out.count(CHAN), 1)
+        self.assertEqual(len(out.splitlines()), 4)   # header + 3 conversations
+
+    def test_several_groups_show_which_each_conversation_is_in(self):
+        # Every member of EITHER group is listed (not only those in both), with a
+        # GROUPS column naming the requested groups it is in, in the order typed.
+        self.fill_groups()
+        code, out, _ = self.run_main("list", "--groups", "Work", "Lab Notes")
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "ID           NICKNAME       SLACK NAME        GROUPS\n"
+                              f"{OTHER_CHAN}  -              lab-notes         Lab Notes\n"
+                              f"{CHAN}  Planning Team  project-planning  Work\n")
+        _, out, _ = self.run_main("list", "--groups", "Work", "Research")
+        self.assertIn(f"{CHAN}  Planning Team  project-planning  Work, Research\n", out)
+        self.assertIn("D0000000003  Alex           (DM)              Research\n", out)
+
+    def test_one_group_has_no_groups_column(self):
+        self.fill_groups()
+        _, out, _ = self.run_main("list", "--groups", "Research")
+        self.assertNotIn("GROUPS", out)
+
+    def test_empty_group(self):
+        self.fill_groups()
+        code, out, _ = self.run_main("list", "--groups", "Ideas")
+        self.assertEqual((code, out), (0, "Ideas has no conversations yet.\n"))
+
+    def test_unknown_group_is_an_error(self):
+        self.fill_groups()
+        code, out, err = self.run_main("list", "--groups", "Nope")
+        self.assertEqual((code, out), (1, ""))
+        self.assertEqual(err, "No group named 'Nope'.")
+
+    def test_names_are_case_sensitive_with_a_hint(self):
+        self.fill_groups()
+        code, _, err = self.run_main("list", "--groups", "research")
+        self.assertEqual(code, 1)
+        self.assertEqual(err, "No group named 'research'.\n"
+                              "Did you mean 'Research'? Group names are exact.")
+
+    def test_unknown_among_several_points_to_search(self):
+        # `--groups Research planning` reads "planning" as a group: say how to
+        # search instead.
+        self.fill_groups()
+        code, _, err = self.run_main("list", "--groups", "Research", "planning")
+        self.assertEqual(code, 1)
+        self.assertIn("No group named 'planning'.", err)
+        self.assertIn("use --search", err)
+
+    def test_search_within_a_group(self):
+        self.fill_groups()
+        code, out, _ = self.run_main("list", "--groups", "Research",
+                                     "--search", "planning")
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "ID           NICKNAME       SLACK NAME\n"
+                              f"{CHAN}  Planning Team  project-planning\n")
+
+    def test_search_within_a_group_with_no_match(self):
+        self.fill_groups()
+        code, _, err = self.run_main("list", "--groups", "Work", "--search", "lab")
+        self.assertEqual(code, 1)
+        self.assertEqual(err, "No conversation in Work matches 'lab'.")
+
+    def test_search_flag_matches_positional_search(self):
+        self.fill_groups()
+        _, positional, _ = self.run_main("list", "planning")
+        code, flag, _ = self.run_main("list", "--search", "planning")
+        self.assertEqual(code, 0)
+        self.assertEqual(flag, positional)
+        _, two, _ = self.run_main("list", "--search", "project", "PLAN")
+        self.assertEqual(two, positional)
+
+    def test_positional_search_still_works_unchanged(self):
+        self.fill()
+        code, out, _ = self.run_main("list", "planning")
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "ID           NICKNAME       SLACK NAME\n"
+                              f"{CHAN}  Planning Team  project-planning\n")
+
+    def test_positional_search_with_groups_is_refused_with_the_fix(self):
+        self.fill_groups()
+        for argv in (("planning", "--groups", "Research"),
+                     ("--groups", "Lab Notes", "--nicknames", "planning")):
+            with self.subTest(argv=argv):
+                code, out, err = self.run_main("list", *argv)
+                self.assertEqual((code, out), (1, ""))
+                self.assertTrue(err.startswith("When using --groups, use --search "
+                                               "to search within the results:\n"))
+        _, _, err = self.run_main("list", "planning", "--groups", "Lab Notes")
+        self.assertIn('slack-export list --groups "Lab Notes" --search planning', err)
+
+    def test_both_kinds_of_search_at_once_is_refused(self):
+        self.fill()
+        code, _, err = self.run_main("list", "lab", "--search", "planning")
+        self.assertEqual(code, 1)
+        self.assertIn("not both", err)
+
+    def test_search_needs_a_group_name_with_groups(self):
+        self.fill_groups()
+        code, _, err = self.run_main("list", "--groups", "--search", "planning")
+        self.assertEqual(code, 1)
+        self.assertIn("needs a group name", err)
 
 
 class FakeSlack:

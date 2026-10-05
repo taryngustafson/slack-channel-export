@@ -179,6 +179,13 @@ slack-export group Research C0123456789 D0123456789
 
 A conversation can be in any number of groups, or none. If a conversation is not in your conversation index yet, `group` looks it up in Slack and adds it to the index first.
 
+To see your groups, or the conversations in one:
+
+```sh
+slack-export list --groups
+slack-export list --groups Research
+```
+
 For more about the conversation index, groups, re-running existing exports, and other options, see **[USAGE.md](USAGE.md)**.
 
 ## What gets saved

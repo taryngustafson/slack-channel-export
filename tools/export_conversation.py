@@ -41,6 +41,9 @@ Slack and added to it first:
 
     slack-export group Research                     # make an empty group
     slack-export group Research C0123456789 D0123456789   # add conversations to it
+    slack-export list --groups                      # your groups, with their sizes
+    slack-export list --groups Research             # the conversations in one
+    slack-export list --groups Research --search planning   # ...searched
 """
 
 import argparse
@@ -660,14 +663,25 @@ def require_conversation_id(raw) -> str:
     return conversation_id
 
 
+def _quote(word: str) -> str:
+    """A word as it would need to be typed: in quotes if it contains a space."""
+    return f'"{word}"' if " " in word else word
+
+
 def list_command(argv) -> None:
-    """`slack-export list [search ...]`: print saved IDs and names. Offline.
+    """`slack-export list [search ...]`, `list --search WORD ...` and
+    `list --groups [GROUP ...] [--search WORD ...]`: print conversations or
+    groups from the conversation index. Offline.
 
     Filter, sort and format are separate steps in channel_directory, so a later
     --sort or extra column is a new flag here and a table entry there.
     """
     parser = argparse.ArgumentParser(
         prog="slack-export list",
+        usage="slack-export list [search ...]\n"
+              "       slack-export list --search WORD [WORD ...]\n"
+              "       slack-export list --groups [GROUP ...] "
+              "[--search WORD [WORD ...]]",
         # Line breaks written out, since RawDescriptionHelpFormatter keeps them as
         # they are - it is what lets the paragraphs stay separate.
         description="Print every conversation in your conversation index, one per\n"
@@ -681,6 +695,11 @@ def list_command(argv) -> None:
                     "channel name, so it shows as (DM) - unless it is a group DM\n"
                     "someone has named.\n"
                     "A '-' marks an empty column.\n\n"
+                    "--groups alone lists your groups and how many conversations\n"
+                    "each has. With group names, it lists the conversations in\n"
+                    "those groups instead; add --search to search within them.\n"
+                    "With several names, every conversation in any of them is\n"
+                    "listed once, and a GROUPS column says which it is in.\n\n"
                     "Reads only the conversation index - never the Keychain or "
                     "Slack.",
         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -693,12 +712,37 @@ def list_command(argv) -> None:
                         help="show only conversations whose ID, nickname, or "
                              "Slack channel name contains this - ignoring case, "
                              "spaces and punctuation")
+    parser.add_argument("--search", dest="search_flag", nargs="+", metavar="WORD",
+                        help="the same search, spelled out; needed with --groups")
+    # Any number of names, so `--groups Research Work` already works. None when
+    # absent, [] when given alone, so the two can be told apart.
+    parser.add_argument("--groups", nargs="*", metavar="GROUP",
+                        help="with no names, list your groups; with names, list "
+                             "the conversations in those groups (names are "
+                             "exact; quote a name with spaces)")
     args = parser.parse_args(argv)
+
+    if args.search and args.search_flag:
+        sys.exit("FATAL: give the search either as words after `list` or with "
+                 "--search, not both.")
+    # Words after `list` are never read as search when --groups is used: where
+    # they fell on the line would decide their meaning (D53).
+    if args.search and args.groups is not None:
+        names = " ".join(_quote(n) for n in args.groups) or "<group>"
+        sys.exit(f"When using --groups, use --search to search within the "
+                 f"results:\n"
+                 f"  slack-export list --groups {names} --search "
+                 f"{' '.join(args.search)}")
+    words = args.search_flag or args.search
     # None when no search was typed, so only that lists everything: a typed term
     # has to match, even one that is only punctuation.
-    term = " ".join(args.search) if args.search else None
+    term = " ".join(words) if words else None
 
     store = load_directory()
+    if args.groups is not None:
+        _list_groups(store, args.groups, term)
+        return
+
     rows = channel_directory.search(store, term)
     if not rows:
         if channel_directory.search(store):
@@ -708,6 +752,66 @@ def list_command(argv) -> None:
         return
     for line in channel_directory.format_rows(channel_directory.sort_rows(rows),
                                               header=True):
+        print(line)
+
+
+def _list_groups(store: dict, names: list, term) -> None:
+    """`list --groups`: every group with its size, or the members of the named
+    groups, searched like `list` if a term is given."""
+    if not names:
+        if term is not None:
+            sys.exit("FATAL: --search searches the conversations in a group, so "
+                     "it needs a group name:\n"
+                     f"  slack-export list --groups <group> --search {term}")
+        sizes = channel_directory.group_sizes(store)
+        if not sizes:
+            print("You have no groups yet.\n"
+                  "To make one: slack-export group <name>")
+            return
+        cells = [["GROUP", "CONVERSATIONS"]]
+        cells += [[name, str(size)] for name, size in sizes]
+        for line in channel_directory.align(cells):
+            print(line)
+        return
+
+    names = list(dict.fromkeys(name.strip() for name in names))
+    groups = store.get("groups", {})
+    unknown = [name for name in names if name not in groups]
+    if unknown:
+        lines = []
+        for name in unknown:
+            lines.append(f"No group named '{name}'.")
+            similar = channel_directory.similar_group_names(store, name)
+            if similar:
+                lines.append("Did you mean " + " or ".join(f"'{s}'" for s in similar)
+                             + "? Group names are exact.")
+        if len(names) > 1:
+            lines.append("(To search within groups, use --search: "
+                         "slack-export list --groups <group> --search <words>)")
+        sys.exit("\n".join(lines))
+
+    members = channel_directory.group_members(store, names)
+    if not members:
+        print(f"{names[0]} has no conversations yet." if len(names) == 1
+              else "None of these groups has any conversations yet.")
+        return
+    rows = [row for row in channel_directory.search(store, term)
+            if (row["team_id"], row["channel_id"]) in members]
+    if not rows:
+        where = names[0] if len(names) == 1 else "these groups"
+        sys.exit(f"No conversation in {where} matches '{term}'.")
+    columns = channel_directory.DEFAULT_COLUMNS
+    if len(names) > 1:
+        # Every conversation in ANY of the groups is listed once; this column says
+        # which of the named groups it is in, in the order they were typed.
+        each = {name: channel_directory.group_members(store, [name])
+                for name in names}
+        for row in rows:
+            key = (row["team_id"], row["channel_id"])
+            row["groups"] = ", ".join(n for n in names if key in each[n])
+        columns += ("groups",)
+    for line in channel_directory.format_rows(channel_directory.sort_rows(rows),
+                                              columns, header=True):
         print(line)
 
 
@@ -977,6 +1081,7 @@ def main() -> None:
               "[--out DIR] [--no-threads] [--copy]\n"
               "       slack-export save conversation_id [nickname ...]\n"
               "       slack-export list [search ...]\n"
+              "       slack-export list --groups [group ...] [--search word ...]\n"
               "       slack-export group name [ID ...]",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     # No default, and nargs is not '?' - the target is REQUIRED. This tool never

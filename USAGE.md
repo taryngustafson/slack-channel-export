@@ -317,6 +317,14 @@ slack-export list planning
 
 You can search by conversation ID or by the names `list` shows.
 
+`--search` does the same thing, spelled out:
+
+```sh
+slack-export list --search planning
+```
+
+It is needed when searching within groups (see [Browse your groups](#browse-your-groups)).
+
 ```text
 ID           NICKNAME               SLACK NAME
 C0123456789  -                      project-planning
@@ -471,7 +479,85 @@ A group name with spaces needs quotes: slack-export group "Lab Notes" C012345678
 
 A conversation ID in the name's place, such as `slack-export group C0123456789`, is refused, so a group is never accidentally named after a conversation.
 
-Groups are not shown by `slack-export list`, and are stored in the conversation index file alongside everything else.
+Groups are not shown by plain `slack-export list`, and are stored in the conversation index file alongside everything else.
+
+### Browse your groups
+
+To see all your groups, and how many conversations each has:
+
+```sh
+slack-export list --groups
+```
+
+```text
+GROUP      CONVERSATIONS
+Ideas      0
+Lab Notes  1
+Research   3
+```
+
+To see the conversations in a group, add its name:
+
+```sh
+slack-export list --groups Research
+```
+
+```text
+ID           NICKNAME  SLACK NAME
+D0987654321  -         (DM)
+D0123456789  Alex      (DM)
+C0123456789  -         project-planning
+```
+
+This is the same table, in the same order, as `slack-export list`, limited to that group. A group with nothing in it says so:
+
+```text
+Ideas has no conversations yet.
+```
+
+You can name more than one group. Every conversation in any of them is listed once, and a `GROUPS` column shows which of the named groups each one is in:
+
+```sh
+slack-export list --groups Research "Lab Notes"
+```
+
+```text
+ID           NICKNAME  SLACK NAME        GROUPS
+D0987654321  -         (DM)              Research
+D0123456789  Alex      (DM)              Research
+C0123456789  -         project-planning  Research, Lab Notes
+D0234567890  Sam       (DM)              Lab Notes
+```
+
+Group names are exact. A name that matches an existing group except for capitalization gets a hint:
+
+```text
+No group named 'research'.
+Did you mean 'Research'? Group names are exact.
+```
+
+To search within a group, use `--search`:
+
+```sh
+slack-export list --groups Research --search planning
+```
+
+```text
+ID           NICKNAME  SLACK NAME
+C0123456789  -         project-planning
+```
+
+With `--groups`, search words must come after `--search`. Words typed straight after `list` are refused rather than guessed at, since their meaning would otherwise depend on where they appear:
+
+```text
+$ slack-export list planning --groups Research
+When using --groups, use --search to search within the results:
+  slack-export list --groups Research --search planning
+```
+
+Plain `slack-export list planning` still searches your whole conversation index as before.
+
+Browsing groups is completely local. It reads only the conversation index and never contacts Slack or reads your Slack token.
 
 ## Options
 
@@ -658,6 +744,10 @@ The conversation index is inside a Git repository that does not ignore it, so it
 ### `Nothing was changed: ... is not a conversation ID`
 
 Something after the group's name is not a conversation ID or Slack link. Most often, a group name with a space was typed without quotes. Nothing was changed; put the name in quotes and run the command again.
+
+### `No group named '...'`
+
+`slack-export list --groups` was given a name that is not one of your groups. Group names are exact, including capitalization; if one differs only in capitalization, the message suggests it. `slack-export list --groups` on its own lists every group you have.
 
 ### `the nickname '...' is already used by`
 
