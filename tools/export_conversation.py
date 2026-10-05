@@ -151,6 +151,21 @@ def safe_stem(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-")[:NAME_MAX].strip("-")
 
 
+def name_note(typed: str, stem: str, conversation_id: str):
+    """What the export's summary says about the file name, or None when it is
+    exactly what was typed (or nothing was typed). A file name keeps only letters,
+    digits and hyphens, so "Lab & Field" becomes Lab-Field - said outright, since
+    the name a person typed is easy to mistake for the conversation's name (D56).
+    """
+    typed = typed.strip()
+    if not typed or stem == typed:
+        return None
+    if stem == conversation_id:
+        return (f'{stem}  ("{typed}" has no letters or digits, so the conversation '
+                f'ID is used)')
+    return f'{stem}  (from "{typed}": file names keep only letters, digits and hyphens)'
+
+
 def display_path(path: Path) -> str:
     """Render a path for the summary: short when it is somewhere familiar.
 
@@ -382,8 +397,8 @@ def record_in_directory(auth: dict, info: dict, conversation_id: str, stem: str,
                 f"              {reason.removeprefix('FATAL: ')}")
     row = next(r for r in channel_directory.search(store, conversation_id)
                if r["team_id"] == team_id and r["channel_id"] == conversation_id)
-    return "  ".join([conversation_id,
-                      channel_directory.shown_slack_name(row) or channel_directory.BLANK])
+    # The same columns `list` prints - ID, nickname, Slack name - minus the header.
+    return channel_directory.format_rows([row])[0]
 
 
 def swap_header(existing: str, new_header: str, marker: str):
@@ -489,6 +504,9 @@ def _self_test() -> None:
     assert safe_stem("v1.2 planning") == "v1-2-planning"
     assert safe_stem("!!!") == "", "a name with no letters must fall back to the ID"
     assert "." not in safe_stem("notes.md"), "a dot would break the .raw.json suffix"
+    assert name_note("Project-Planning", "Project-Planning", "C0123456789") is None
+    assert name_note("", "C0123456789", "C0123456789") is None
+    assert name_note("Lab & Field", "Lab-Field", "C0123456789").startswith("Lab-Field")
 
     # relative_to raises instead of falling back, so prove all three branches.
     assert display_path(EXPORT_DIR / "a.md") == "exports/a.md"
@@ -879,23 +897,19 @@ def save_command(argv) -> None:
 
     row = next(r for r in channel_directory.search(store, conversation_id)
                if r["team_id"] == team_id and r["channel_id"] == conversation_id)
-    shown = channel_directory.shown_slack_name(row) or channel_directory.BLANK
-    print(f"{conversation_id}  {shown}  ({channel_directory.KINDS[kind]})")
+    # The row as `list` prints it, then the kind - except for a 1:1 DM, whose
+    # Slack-name column already says (DM).
+    line = channel_directory.format_rows([row])[0]
+    if kind != "dm":
+        line += f"  ({channel_directory.KINDS[kind]})"
+    print(line)
     if row["nickname"]:
         print(f"  nickname: {row['nickname']}  "
               f"({outcome if nickname else 'unchanged'})")
     elif not channel_directory.real_slack_name(row):
-        # Slack gives it no name, so only a nickname identifies it for good. Said
-        # outright when an export name is standing in, which could otherwise be
-        # read as a nickname just saved.
-        if channel_directory.shown_slack_name(row):
-            print(f"  No nickname yet. To give it one:  "
-                  f"slack-export save {conversation_id} <nickname>")
-        else:
-            print(f"  It has no Slack channel name, so `slack-export list` will "
-                  f"show '{channel_directory.BLANK}'.\n"
-                  f"  Give it a nickname to find it later:\n"
-                  f"    slack-export save {conversation_id} <nickname>")
+        # Slack gives it no name, so only a nickname identifies it for good.
+        print(f"  No nickname yet. To give it one:  "
+              f"slack-export save {conversation_id} <nickname>")
 
 
 def _count(n: int) -> str:
@@ -1406,6 +1420,9 @@ def main() -> None:
           f"({reply_total} of them thread replies)")
     print(f"  people     : {len(users)} names resolved")
     print()
+    note = name_note(" ".join(args.name), stem, args.conversation_id)
+    if note:
+        print(f"  file name: {note}")
     for path, what, count in written:
         size = f"{path.stat().st_size / 1024:.1f} KB" if path.exists() else "-"
         detail = f"{what} (+{count})" if count else what

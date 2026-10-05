@@ -342,6 +342,34 @@ class ExporterOrderTests(TempDirTest):
         self.assertTrue(self.marker.exists(), "it should get as far as the Keychain")
 
 
+class NameNoteTests(unittest.TestCase):
+    """The summary says when the file name is not what was typed (D56)."""
+
+    def test_nothing_typed_or_kept_exactly_says_nothing(self):
+        self.assertIsNone(ec.name_note("", "C0123456789", "C0123456789"))
+        self.assertIsNone(ec.name_note("Project-Planning", "Project-Planning",
+                                       "C0123456789"))
+
+    def test_a_changed_name_is_reported(self):
+        self.assertEqual(ec.name_note("Lab & Field", "Lab-Field", "C0123456789"),
+                         'Lab-Field  (from "Lab & Field": file names keep only '
+                         'letters, digits and hyphens)')
+
+    def test_spaces_alone_are_reported_too(self):
+        self.assertIsNotNone(ec.name_note("Project Planning", "Project-Planning",
+                                          "C0123456789"))
+
+    def test_a_name_with_nothing_usable_falls_back_to_the_id(self):
+        self.assertEqual(ec.name_note("!!!", "C0123456789", "C0123456789"),
+                         'C0123456789  ("!!!" has no letters or digits, so the '
+                         'conversation ID is used)')
+
+    def test_the_note_matches_what_safe_stem_does(self):
+        typed = "Notes: v1.2 / draft"
+        self.assertTrue(ec.name_note(typed, ec.safe_stem(typed), "C0123456789")
+                        .startswith(ec.safe_stem(typed) + "  "))
+
+
 class ClipboardTests(unittest.TestCase):
     """Copying is opt-in: a long export pasted by surprise can freeze an app."""
 

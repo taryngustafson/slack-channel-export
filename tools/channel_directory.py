@@ -431,11 +431,9 @@ def search(data: dict, term: str = None) -> list:
 
 # Slack names a group DM nobody has named "mpdm-<handle>--<handle>--...-1". It
 # identifies no one at a glance and makes the column very wide, so list treats it
-# as no name at all - falling back as a 1:1 DM does - and shows this label only
-# when there is nothing to fall back to. A group DM that has been given a name
-# comes back without the prefix and is shown as it is.
+# as no name at all, as for a 1:1 DM, and shows (DM). A group DM that has been
+# given a name comes back without the prefix and is shown as it is.
 UNNAMED_GROUP_DM_PREFIX = "mpdm-"
-UNNAMED_GROUP_DM = "(unnamed group DM)"
 
 
 def is_unnamed_group_dm(row: dict) -> bool:
@@ -452,42 +450,6 @@ def real_slack_name(row: dict) -> str:
     """The Slack name, or "" when there is none worth showing: a 1:1 DM, or a
     group DM nobody has named."""
     return "" if is_unnamed_group_dm(row) else row["slack_name"]
-
-
-# Marks a name taken from an export file rather than from Slack or the user.
-FROM_EXPORT = " (from export)"
-
-# Marks the user's nickname standing in for a Slack name that does not exist.
-FROM_NICKNAME = " (nickname)"
-
-
-def _export_fallback(row: dict) -> str:
-    """The most recent export name, marked, or "" if never exported.
-
-    The marker is the only thing showing that neither Slack nor the user gave this
-    name, so it must never be dropped. It is worked out each time and never
-    written to the store: a nickname is only ever set by `save`.
-    """
-    return row["latest_export_name"] + FROM_EXPORT if row["latest_export_name"] else ""
-
-
-def shown_slack_name(row: dict) -> str:
-    """The Slack channel name as list prints it.
-
-    A 1:1 DM has no Slack name at all, and an unnamed group DM has none worth
-    showing, so without a fallback either would be a bare ID. It shows the user's
-    nickname instead, marked "(nickname)", or failing that its most recent export
-    name, marked "(from export)". The nickname comes first because the user chose
-    it; an export name is only whatever the file was called. An unnamed group DM
-    with neither is labelled as one.
-    """
-    if real_slack_name(row):
-        return row["slack_name"]
-    if row["nickname"]:
-        return row["nickname"] + FROM_NICKNAME
-    if row["latest_export_name"]:
-        return _export_fallback(row)
-    return UNNAMED_GROUP_DM if is_unnamed_group_dm(row) else ""
 
 
 def list_nickname(row: dict) -> str:

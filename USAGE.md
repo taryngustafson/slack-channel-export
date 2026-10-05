@@ -105,7 +105,13 @@ Project-Planning.md
 Project-Planning.raw.json
 ```
 
-Spaces and punctuation are converted to hyphens so the name works safely as a filename.
+Spaces and punctuation are converted to hyphens so the name works safely as a filename. When that changes what you typed, the summary at the end says so:
+
+```text
+  file name: Lab-Field  (from "Lab & Field": file names keep only letters, digits and hyphens)
+```
+
+This name is only the file name. To give the conversation its own name, with any characters you like, use a nickname (see [Give a conversation a nickname](#give-a-conversation-a-nickname)).
 
 You can also use quotes if you prefer:
 
@@ -269,7 +275,7 @@ Conversation IDs are not very memorable, so `slack-export` keeps a conversation 
 After an export, the last lines show whether the conversation index was updated:
 
 ```text
-  conversation index: C0123456789  project-planning
+  conversation index: C0123456789  [Project-Planning]  project-planning
 ```
 
 If the conversation index cannot be updated, the export itself is still complete. The command tells you what went wrong separately.

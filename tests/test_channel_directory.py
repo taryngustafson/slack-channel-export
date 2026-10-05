@@ -1342,21 +1342,21 @@ class SaveCommandTests(CommandTest):
     def test_saves_slack_name_and_kind_quietly(self):
         code, out, _ = self.run_save(CHAN)
         self.assertEqual(code, 0)
-        self.assertEqual(out, f"{CHAN}  project-planning  (private channel)\n")
+        self.assertEqual(out, f"{CHAN}  -  project-planning  (private channel)\n")
         self.assertEqual(self.stored(), {"slack_name": "project-planning",
                                          "kind": "private_channel"})
         self.assertEqual(mode(self.path), 0o600)
 
     def test_nickname_words_are_joined_and_reported(self):
         _, out, _ = self.run_save(CHAN, "Planning", "Team")
-        self.assertEqual(out, f"{CHAN}  project-planning  (private channel)\n"
+        self.assertEqual(out, f"{CHAN}  Planning Team  project-planning  (private channel)\n"
                               f"  nickname: Planning Team  (added)\n")
         self.assertEqual(self.stored()["nickname"], "Planning Team")
 
     def test_bare_save_keeps_the_existing_nickname(self):
         self.run_save(CHAN, "Planning Team")
         _, out, _ = self.run_save(CHAN)
-        self.assertEqual(out, f"{CHAN}  project-planning  (private channel)\n"
+        self.assertEqual(out, f"{CHAN}  Planning Team  project-planning  (private channel)\n"
                               f"  nickname: Planning Team  (unchanged)\n")
         self.assertEqual(self.stored()["nickname"], "Planning Team")
 
@@ -1384,11 +1384,11 @@ class SaveCommandTests(CommandTest):
         conversations["C0000000004"] = dict(conversations["C0000000004"],
                                             name="Trip Planning")
         _, out, _ = self.run_save("C0000000004", slack=FakeSlack(conversations))
-        self.assertEqual(out, "C0000000004  Trip Planning  (group DM)\n")
+        self.assertEqual(out, "C0000000004  -  Trip Planning  (group DM)\n")
 
     def test_group_dm_kind_and_label(self):
         _, out, _ = self.run_save("C0000000004")
-        self.assertEqual(out, "C0000000004  (unnamed group DM)  (group DM)\n"
+        self.assertEqual(out, "C0000000004  -  (DM)  (group DM)\n"
                               "  No nickname yet. To give it one:  "
                               "slack-export save C0000000004 <nickname>\n")
         self.assertEqual(self.stored("C0000000004")["kind"], "group_dm")
@@ -1399,16 +1399,16 @@ class SaveCommandTests(CommandTest):
         cd.record_export(store, TEAM, "Example", "D0000000003", "Some-Person", WHEN)
         ec.save_directory(store, self.path)
         _, out, _ = self.run_save("D0000000003")
-        self.assertEqual(out, "D0000000003  Some-Person (from export)  (DM)\n"
+        self.assertEqual(out, "D0000000003  [Some-Person]  (DM)\n"
                               "  No nickname yet. To give it one:  "
                               "slack-export save D0000000003 <nickname>\n")
         self.assertNotIn("nickname", self.stored("D0000000003"))
         self.assertEqual(self.stored("D0000000003")["exports"],
                          {"Some-Person": {"last_export_utc": WHEN}})
 
-    def test_dm_with_nickname_shows_it_in_place_of_a_slack_name(self):
+    def test_dm_with_nickname_shows_it_in_the_nickname_column(self):
         _, out, _ = self.run_save("D0000000003", "Alex")
-        self.assertEqual(out, "D0000000003  Alex (nickname)  (DM)\n"
+        self.assertEqual(out, "D0000000003  Alex  (DM)\n"
                               "  nickname: Alex  (added)\n")
 
     def test_bad_id_fails_before_slack_or_the_store(self):
@@ -1454,7 +1454,7 @@ class RecordExportTests(TempStoreTest):
 
     def test_named_export_records_name_kind_and_file(self):
         line = self.record(self.CHANNEL, "Planning")
-        self.assertEqual(line, f"{CHAN}  project-planning")
+        self.assertEqual(line, f"{CHAN}  [Planning]  project-planning")
         self.assertEqual(self.stored(), {
             "slack_name": "project-planning", "kind": "private_channel",
             "exports": {"Planning": {"last_export_utc": WHEN}}})
@@ -1462,7 +1462,7 @@ class RecordExportTests(TempStoreTest):
 
     def test_unnamed_export_is_recorded_under_its_id(self):
         line = self.record(self.DM, "D0000000003")
-        self.assertEqual(line, "D0000000003  D0000000003 (from export)")
+        self.assertEqual(line, "D0000000003  -  (DM)")
         self.assertEqual(self.stored("D0000000003")["exports"],
                          {"D0000000003": {"last_export_utc": WHEN}})
 
@@ -1471,7 +1471,7 @@ class RecordExportTests(TempStoreTest):
         cd.set_nickname(store, TEAM, "Example", "D0000000003", "Alex")
         ec.save_directory(store, self.path)
         line = self.record(self.DM, "Some-Person")
-        self.assertEqual(line, "D0000000003  Alex (nickname)")
+        self.assertEqual(line, "D0000000003  Alex  (DM)")
         self.assertEqual(self.stored("D0000000003")["nickname"], "Alex")
 
     def test_a_top_up_moves_the_time_forward(self):
