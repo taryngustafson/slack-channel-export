@@ -260,15 +260,15 @@ for one channel and try to use `Team Notes` for another channel, the exporter re
 
 ## Find a conversation again
 
-Conversation IDs are not very memorable, so `slack-export` keeps a saved list of conversations you have exported or saved.
+Conversation IDs are not very memorable, so `slack-export` keeps a conversation index: a list of conversations you have exported or saved.
 
-After an export, the last lines show whether the saved list was updated:
+After an export, the last lines show whether the conversation index was updated:
 
 ```text
-  saved list: C0123456789  project-planning
+  conversation index: C0123456789  project-planning
 ```
 
-If the list cannot be updated, the export itself is still complete. The command tells you what went wrong separately.
+If the conversation index cannot be updated, the export itself is still complete. The command tells you what went wrong separately.
 
 ### See what is saved
 
@@ -276,7 +276,7 @@ If the list cannot be updated, the export itself is still complete. The command 
 slack-export list
 ```
 
-This shows each saved conversation in three columns: its ID, your nickname for it, and its Slack channel name.
+This shows each conversation in your conversation index in three columns: its ID, your nickname for it, and its Slack channel name.
 
 ```text
 ID           NICKNAME               SLACK NAME
@@ -287,7 +287,7 @@ D0987654321  [Sam-Lee]              (DM)
 C0345678901  [Trip-Planning-Group]  (DM)
 ```
 
-The list is sorted by Slack channel name. A conversation without one, such as a DM, is sorted by its nickname instead.
+The output is sorted by Slack channel name. A conversation without one, such as a DM, is sorted by its nickname instead.
 
 `list` is completely local. It reads the saved file only and does not contact Slack or read your Slack token, so it also works offline.
 
@@ -303,7 +303,7 @@ The nickname column shows:
 
 The Slack channel name column shows the name Slack gives the conversation. DMs do not have Slack channel names, so a DM shows `(DM)`. A group DM technically has an internal Slack name beginning with `mpdm-`, but that is not very useful to a person, so it also shows as `(DM)` unless someone has given the group DM a name. A normal Slack channel whose actual name starts with `mpdm-` is still shown normally.
 
-### Search the list
+### Search the conversation index
 
 Add a search after `list`:
 
@@ -311,7 +311,7 @@ Add a search after `list`:
 slack-export list planning
 ```
 
-You can search by conversation ID or by the names shown in the list.
+You can search by conversation ID or by the names `list` shows.
 
 ```text
 ID           NICKNAME               SLACK NAME
@@ -348,13 +348,13 @@ Quotes are optional, just like they are when naming an export:
 slack-export save D0123456789 "Alex Kim"
 ```
 
-Within the same Slack workspace, a nickname can belong to only one saved conversation.
+Within the same Slack workspace, a nickname can belong to only one conversation in your conversation index.
 
 Saving the same conversation again with a new nickname changes it. Saving it again without a nickname leaves the existing nickname alone.
 
 ### Save a conversation without exporting it
 
-You can add a conversation to the list without downloading its messages:
+You can add a conversation to your conversation index without downloading its messages:
 
 ```sh
 slack-export save C0123456789
@@ -364,7 +364,7 @@ Unlike `list`, `save` does contact Slack. It uses the same read-only access as t
 
 Running `save` again later also refreshes the Slack channel name if it has changed.
 
-### Where the saved list lives
+### Where the conversation index lives
 
 ```text
 ~/.config/slack-export/channels.json
@@ -382,7 +382,7 @@ It does **not** contain Slack message text or attachments.
 
 The folder and file are created with owner-only permissions.
 
-The saved list normally lives outside the `slack-channel-export` project. If its location is inside another Git repository — for example, because you keep `~/.config` in a dotfiles repo — `slack-export` checks whether Git could track `channels.json` and refuses to write it unless that file is ignored.
+The conversation index normally lives outside the `slack-channel-export` project. If its location is inside another Git repository — for example, because you keep `~/.config` in a dotfiles repo — `slack-export` checks whether Git could track `channels.json` and refuses to write it unless that file is ignored.
 
 ## Options
 
@@ -540,17 +540,17 @@ Choose:
 
 For example, the project's normal `exports/` directory is already configured appropriately.
 
-### `saved list: NOT updated - the export itself is fine`
+### `conversation index: NOT updated - the export itself is fine`
 
-The export worked, but it could not be added to the saved list. The line below it gives the reason. Your exported files are complete.
+The export worked, but it could not be added to the conversation index. The line below it gives the reason. Your exported files are complete.
 
 Once the problem is fixed, running the same export again adds it.
 
 ### `channels.json is unreadable`
 
-The saved list is not valid JSON, or has a structure this version does not understand. `slack-export` stops rather than quietly starting a new, empty list, which would lose every saved name.
+The conversation index is not valid JSON, or has a structure this version does not understand. `slack-export` stops rather than quietly starting a new, empty index, which would lose every nickname and name in it.
 
-Fix the file, or move it aside to start the list over:
+Fix the file, or move it aside to start the conversation index over:
 
 ```sh
 mv ~/.config/slack-export/channels.json ~/.config/slack-export/channels.json.old
@@ -558,7 +558,7 @@ mv ~/.config/slack-export/channels.json ~/.config/slack-export/channels.json.old
 
 ### `refusing to save channel names to ~/.config/slack-export/channels.json`
 
-The saved list is inside a Git repository that does not ignore it, so its names and IDs could be committed. Add `channels.json` to that repository's `.gitignore`.
+The conversation index is inside a Git repository that does not ignore it, so its names and IDs could be committed. Add `channels.json` to that repository's `.gitignore`.
 
 ### `the nickname '...' is already used by`
 

@@ -26,14 +26,20 @@ conversation named on the command line - it never enumerates the workspace.
     slack-export C0123456789 --out ~/Desktop        # put the .md and .txt there
     slack-export C0123456789                        # again later: append what is new
 
-Saved conversations, so an ID can be found again without going back to Slack. Every
-export adds itself to the list; `save` is for adding one without exporting it, or
-for giving it a nickname:
+The conversation index remembers conversations, so an ID can be found again without
+going back to Slack. Every export adds itself to it; `save` is for adding one without
+exporting it, or for giving it a nickname:
 
     slack-export save C0123456789                   # remember it
     slack-export save C0123456789 Planning Team     # ...with your own nickname
     slack-export list                   # each ID, your nickname, its Slack name
     slack-export list planning          # only those with this in an ID or a name
+
+Groups collect saved conversations under a name of your choosing. A conversation can
+be in any number of groups, or none:
+
+    slack-export group Research                     # make an empty group
+    slack-export group Research C0123456789 D0123456789   # add conversations to it
 """
 
 import argparse
@@ -42,6 +48,7 @@ import os
 import re
 import subprocess
 import sys
+import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -314,8 +321,8 @@ def load_directory(path: Path = None) -> dict:
         return channel_directory.validate(json.loads(path.read_text()))
     except (json.JSONDecodeError, OSError, ValueError) as exc:
         sys.exit(f"FATAL: {display_path(path)} is unreadable ({exc}).\n"
-                 f"       Fix it by hand, or move it aside to start the saved "
-                 f"names over.")
+                 f"       Fix it by hand, or move it aside to start the "
+                 f"conversation index over.")
 
 
 def save_directory(data: dict, path: Path = None) -> None:
@@ -342,7 +349,7 @@ def save_directory(data: dict, path: Path = None) -> None:
 
 def record_in_directory(auth: dict, info: dict, conversation_id: str, stem: str,
                         when_utc: str, path: Path = None) -> str:
-    """Add this export to the saved list, and say how it went in one line.
+    """Add this export to the conversation index, and say how it went in one line.
 
     Records the Slack channel name, the kind and the export name; a nickname is
     only ever set by `save`, so it is left alone. Runs after the export files are
@@ -662,17 +669,19 @@ def list_command(argv) -> None:
         prog="slack-export list",
         # Line breaks written out, since RawDescriptionHelpFormatter keeps them as
         # they are - it is what lets the paragraphs stay separate.
-        description="Print every saved conversation, one per line, under a header\n"
-                    "naming the three columns: its ID, your nickname for it, and\n"
-                    "its Slack channel name. Sorted by Slack channel name, or by nickname for a\n"
-                    "conversation Slack gives no name, such as a 1:1 DM.\n\n"
+        description="Print every conversation in your conversation index, one per\n"
+                    "line, under a header naming the three columns: its ID, your\n"
+                    "nickname for it, and its Slack channel name. Sorted by Slack\n"
+                    "channel name, or by nickname for a conversation Slack gives\n"
+                    "no name, such as a 1:1 DM.\n\n"
                     "With no nickname, the nickname column shows the name of its\n"
                     "most recent export in [brackets] - a name you did not choose -\n"
                     "unless that export was given no name. A DM has no Slack\n"
                     "channel name, so it shows as (DM) - unless it is a group DM\n"
                     "someone has named.\n"
                     "A '-' marks an empty column.\n\n"
-                    "Reads only the saved list - never the Keychain or Slack.",
+                    "Reads only the conversation index - never the Keychain or "
+                    "Slack.",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     # The nickname column used to be opt-in. It is always shown now, but -n is
     # still accepted, silently, so a habit or a script that types it keeps working.
@@ -693,8 +702,8 @@ def list_command(argv) -> None:
     if not rows:
         if channel_directory.search(store):
             # Exit 1 on no match, as grep does, so a script can tell.
-            sys.exit(f"No saved conversation matches '{term}'.")
-        print("No saved conversations yet.")
+            sys.exit(f"No conversation in your conversation index matches '{term}'.")
+        print("Your conversation index is empty.")
         return
     for line in channel_directory.format_rows(channel_directory.sort_rows(rows),
                                               header=True):
@@ -710,8 +719,8 @@ def save_command(argv) -> None:
     """
     parser = argparse.ArgumentParser(
         prog="slack-export save",
-        description="Save a conversation so `slack-export list` can find its ID "
-                    "again. Records its Slack channel name and kind, and your "
+        description="Save a conversation to your conversation index, so "
+                    "`slack-export list` can find its ID again. Records its Slack channel name and kind, and your "
                     "nickname for it if you give one. Saving again refreshes the "
                     "Slack channel name; a nickname is only changed by giving a "
                     "new one. Contacts Slack, read-only.")
@@ -721,7 +730,7 @@ def save_command(argv) -> None:
     # Every leftover word is the nickname, so quotes are optional, as for an export.
     parser.add_argument("nickname", nargs="*",
                         help="your own name for it (optional); must not already "
-                             "belong to another saved conversation")
+                             "belong to another conversation in your index")
     args = parser.parse_args(argv)
     conversation_id = require_conversation_id(args.conversation_id)
     nickname = " ".join(args.nickname).strip()
@@ -777,12 +786,170 @@ def save_command(argv) -> None:
                   f"    slack-export save {conversation_id} <nickname>")
 
 
+def _count(n: int) -> str:
+    return f"{n} conversation" + ("" if n == 1 else "s")
+
+
+def _index_from_slack(store: dict, client, auth: dict, conversation_id: str):
+    """Look `conversation_id` up in Slack and add it to the conversation index, as
+    `save` does but with no nickname. Returns None, or why it could not be added.
+
+    Slack's "not found" also covers a conversation this token simply cannot see,
+    so it is never reported as proof that the ID is wrong.
+    """
+    try:
+        info = client.conversations_info(channel=conversation_id)["channel"]
+    except SlackApiError as exc:
+        error = exc.response["error"]
+        if error == "channel_not_found":
+            return "conversation not found or not accessible"
+        return f"Slack could not look it up ({error})"
+    team_id, team_name = auth["team_id"], auth["team"]
+    channel_directory.set_slack_name(store, team_id, team_name, conversation_id,
+                                     info.get("name") or "")
+    channel_directory.set_kind(store, team_id, team_name, conversation_id,
+                               channel_directory.kind_of(info))
+    return None
+
+
+def group_command(argv) -> None:
+    """`slack-export group NAME [ID ...]`: make a group, or add conversations to
+    one.
+
+    Conversations already in the conversation index are handled locally. One that
+    is not is looked up in Slack, read-only, and added to the index first - so the
+    Keychain and Slack are touched only when some ID actually needs it. Adds what
+    it can and reports the rest; exits 1 if anything could not be added, but only
+    after saving what was.
+    """
+    parser = argparse.ArgumentParser(
+        prog="slack-export group",
+        # Each paragraph wrapped on its own, so the blank lines between them
+        # survive (the default formatter would run them together).
+        description="\n\n".join(textwrap.fill(paragraph, 78) for paragraph in (
+            "Make a group of conversations, or add conversations to one. With "
+            "only a name, makes an empty group. With IDs, adds them, making the "
+            "group first if it is new; adding never removes anything already in "
+            "it.",
+            "Conversations already in your conversation index are handled "
+            "locally. If an ID is not in it yet, slack-export looks it up in "
+            "Slack (read-only) and adds it to the conversation index before "
+            "adding it to the group. Conversations Slack cannot find or access "
+            "are not added.",
+            "Group names are exact: 'Research' and 'research' are two groups. "
+            "Put a name with spaces in quotes.")),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("name", help="the group's name")
+    parser.add_argument("conversations", nargs="*", metavar="ID",
+                        help="conversation IDs - C... or D... - or Slack links "
+                             "containing them")
+    args = parser.parse_args(argv)
+    name = args.name.strip()
+    if not name:
+        sys.exit("FATAL: a group name cannot be empty.")
+    # The easiest slip is leaving the name out, which would make a group named
+    # after the first conversation.
+    if parse_conversation_id(name):
+        sys.exit(f"FATAL: '{name}' is a conversation ID, not a group name.\n"
+                 f"       Give the group's name first:  "
+                 f"slack-export group <name> {name} ...")
+    # A word that is not a conversation ID is a slip in the command itself -
+    # usually a group name with a space, typed without quotes - so it cancels the
+    # whole command (D48), before the Keychain or Slack is touched.
+    not_ids = list(dict.fromkeys(raw for raw in args.conversations
+                                 if parse_conversation_id(raw) is None))
+    if not_ids:
+        verb = ("is not a conversation ID" if len(not_ids) == 1
+                else "are not conversation IDs")
+        sys.exit(f"Nothing was changed: {', '.join(not_ids)} {verb}.\n"
+                 f'A group name with spaces needs quotes: '
+                 f'slack-export group "Lab Notes" C0123456789')
+
+    store = load_directory()
+    existed = name in store.get("groups", {})
+
+    if not args.conversations:
+        if channel_directory.create_group(store, name) == "exists":
+            size = len(store["groups"][name])
+            print(f"Group {name} already exists ({_count(size)}). "
+                  f"Nothing was changed.")
+            return
+        save_directory(store)
+        print(f"Created group {name} (empty).")
+        return
+
+    # The same conversation typed twice (say, as an ID and as a link) is handled
+    # once, in the order first typed.
+    wanted = list(dict.fromkeys(parse_conversation_id(raw)
+                                for raw in args.conversations))
+    # Slack is contacted only if something is missing from the index, and then
+    # once, before anything changes: a missing or over-scoped token stops the run
+    # with nothing written.
+    client = auth = None
+    if any(not channel_directory.saved_in(store, cid) for cid in wanted):
+        client = connect()
+        _, auth = assert_read_only(client, quiet=True)
+
+    added, already, failed = [], [], []
+    for conversation_id in wanted:
+        teams = channel_directory.saved_in(store, conversation_id)
+        if not teams:
+            reason = _index_from_slack(store, client, auth, conversation_id)
+            if reason:
+                failed.append((conversation_id, reason))
+                continue
+            teams = [auth["team_id"]]
+        if len(teams) > 1:
+            failed.append((conversation_id,
+                           "in the conversation index for more than one "
+                           "workspace (not supported yet)"))
+            continue
+        outcome = channel_directory.add_to_group(store, name, teams[0],
+                                                 conversation_id)
+        row = next(r for r in channel_directory.search(store, conversation_id)
+                   if r["team_id"] == teams[0] and r["channel_id"] == conversation_id)
+        (added if outcome == "added" else already).append(row)
+    # One write, so a conversation new to the index and its place in the group are
+    # saved together or not at all. Nothing is indexed without also being added.
+    if added:
+        save_directory(store)
+
+    # Sections by outcome; added and already-in rows share one set of columns.
+    lines = channel_directory.format_rows(added + already)
+    sections = []
+    if added:
+        sections.append([f"Added to {name}:"]
+                        + [f"  {line}" for line in lines[:len(added)]])
+    if already:
+        sections.append([f"Already in {name}:"]
+                        + [f"  {line}" for line in lines[len(added):]])
+    if failed:
+        width = max(len(cid) for cid, _ in failed)
+        sections.append(["Could not add:"]
+                        + [f"  {cid.ljust(width)}  {why}" for cid, why in failed])
+    if name in store.get("groups", {}):
+        size = _count(len(store["groups"][name]))
+        if added:
+            summary = f"{name} now has {size}."
+            if not existed:
+                summary = f"Created group {name}. {summary}"
+        else:
+            summary = f"No changes - {name} still has {size}."
+    else:
+        summary = f"No changes - group {name} was not created."
+    sections.append([summary])
+    print("\n\n".join("\n".join(section) for section in sections))
+    if failed:
+        sys.exit(1)
+
+
 # Words that, as the first argument, run something other than an export. A
 # conversation ID can never be one of them: parse_conversation_id accepts only
 # ID-shaped text and Slack links.
 COMMANDS = {
     "list": list_command,
     "save": save_command,
+    "group": group_command,
 }
 
 
@@ -800,7 +967,8 @@ def main() -> None:
         usage="slack-export conversation_id [name ...] "
               "[--out DIR] [--no-threads] [--no-clipboard]\n"
               "       slack-export save conversation_id [nickname ...]\n"
-              "       slack-export list [search ...]",
+              "       slack-export list [search ...]\n"
+              "       slack-export group name [ID ...]",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     # No default, and nargs is not '?' - the target is REQUIRED. This tool never
     # enumerates the workspace or guesses what to export.
@@ -1050,7 +1218,7 @@ def main() -> None:
     print(f"  ARCHIVE  : {display_path(raw_path)}"
           f"   ({raw_path.stat().st_size / 1024:.1f} KB)")
     print(f"  clipboard: {'copied - ready to paste' if copied else 'skipped'}")
-    print(f"  saved list: {listed}")
+    print(f"  conversation index: {listed}")
 
     if any(what.startswith("SKIPPED") for _, what, _ in written):
         print()

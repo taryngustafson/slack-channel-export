@@ -643,18 +643,18 @@ class ListCommandTests(CommandTest):
         self.fill()
         code, out, err = self.run_main("list", "nothing like this")
         self.assertEqual((code, out), (1, ""))
-        self.assertIn("No saved conversation matches 'nothing like this'", err)
+        self.assertIn("No conversation in your conversation index matches 'nothing like this'", err)
 
     def test_punctuation_only_search_is_not_match_all(self):
         self.fill()
         code, out, err = self.run_main("list", "!!!")
         self.assertEqual((code, out), (1, ""))
-        self.assertIn("No saved conversation matches '!!!'", err)
+        self.assertIn("No conversation in your conversation index matches '!!!'", err)
 
     def test_empty_store_says_so_and_creates_nothing(self):
         code, out, _ = self.run_main("list")
         self.assertEqual(code, 0)
-        self.assertIn("No saved conversations yet", out)
+        self.assertIn("Your conversation index is empty", out)
         self.assertFalse(self.path.exists())
 
     def test_an_id_is_still_an_export_not_a_command(self):
@@ -697,6 +697,236 @@ class FakeSlack:
         if channel not in self.conversations:
             raise ec.SlackApiError("not found", {"error": "channel_not_found"})
         return {"channel": self.conversations[channel]}
+
+
+class GroupCommandTests(CommandTest):
+    """`slack-export group`. run_main fails the test on any Keychain or Slack use,
+    so a test that does not patch `connect` also proves the run stayed local."""
+
+    CONVERSATIONS = {
+        "C0000000005": {"id": "C0000000005", "name": "field-notes", "is_private": False},
+        "D0000000003": {"id": "D0000000003", "is_im": True, "user": "U0000000002"},
+        "D0000000004": {"id": "D0000000004", "is_im": True, "user": "U0000000003"},
+    }
+    GONE = "C0000000009"   # Slack answers channel_not_found
+
+    def run_group(self, *argv, slack=None):
+        """Run `group` with a fake Slack available, for IDs not yet indexed."""
+        self.slack = slack or FakeSlack(self.CONVERSATIONS)
+        with mock.patch.object(ec, "connect", return_value=self.slack):
+            return self.run_main("group", *argv)
+
+    def stored(self):
+        return json.loads(self.path.read_text())
+
+    def members(self, name="Research"):
+        return [m["channel"] for m in self.stored()["groups"][name]]
+
+    # -- staying local --------------------------------------------------------
+
+    def test_name_alone_makes_an_empty_group_locally(self):
+        self.fill()
+        code, out, _ = self.run_main("group", "Research")
+        self.assertEqual((code, out), (0, "Created group Research (empty).\n"))
+        self.assertEqual(self.stored()["groups"], {"Research": []})
+
+    def test_making_an_existing_group_changes_nothing(self):
+        self.fill()
+        self.run_main("group", "Research", CHAN)
+        before = self.path.read_text()
+        code, out, _ = self.run_main("group", "Research")
+        self.assertEqual((code, out), (0, "Group Research already exists "
+                                          "(1 conversation). Nothing was changed.\n"))
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_indexed_conversations_are_added_without_slack(self):
+        self.fill()
+        code, out, _ = self.run_main("group", "Research", CHAN, OTHER_CHAN)
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "Added to Research:\n"
+                              f"  {CHAN}  Planning Team  project-planning\n"
+                              f"  {OTHER_CHAN}  -              lab-notes\n"
+                              "\n"
+                              "Created group Research. Research now has "
+                              "2 conversations.\n")
+        self.assertEqual(self.members(), [CHAN, OTHER_CHAN])
+
+    def test_everything_already_in_the_group_says_no_changes(self):
+        self.fill()
+        self.run_main("group", "Research", CHAN, OTHER_CHAN)
+        before = self.path.read_text()
+        code, out, _ = self.run_main("group", "Research", CHAN, OTHER_CHAN)
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "Already in Research:\n"
+                              f"  {CHAN}  Planning Team  project-planning\n"
+                              f"  {OTHER_CHAN}  -              lab-notes\n"
+                              "\n"
+                              "No changes - Research still has 2 conversations.\n")
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_adding_never_removes_members(self):
+        self.fill()
+        self.run_main("group", "Research", CHAN)
+        self.run_main("group", "Research", OTHER_CHAN)
+        self.assertEqual(self.members(), [CHAN, OTHER_CHAN])
+
+    def test_links_work_and_a_repeat_is_handled_once(self):
+        self.fill()
+        link = f"https://example.slack.com/archives/{CHAN}"
+        code, out, _ = self.run_main("group", "Research", link, CHAN)
+        self.assertEqual(code, 0)
+        self.assertEqual(out.count(CHAN), 1)
+        self.assertEqual(self.members(), [CHAN])
+
+    def test_a_word_that_is_not_an_id_cancels_everything_locally(self):
+        # D48: usually a group name with a space, typed without quotes. Checked
+        # before the Keychain or Slack: GONE would need Slack, and none is patched.
+        self.fill()
+        before = self.path.read_text()
+        code, _, err = self.run_main("group", "Lab", "Notes", CHAN, self.GONE)
+        self.assertEqual(code, 1)
+        self.assertEqual(err, "Nothing was changed: Notes is not a conversation ID.\n"
+                              'A group name with spaces needs quotes: '
+                              'slack-export group "Lab Notes" C0123456789')
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_several_non_ids_are_named_together(self):
+        self.fill()
+        _, _, err = self.run_main("group", "Big", "Lab", "Notes", CHAN)
+        self.assertTrue(err.startswith("Nothing was changed: Lab, Notes are not "
+                                       "conversation IDs.\n"))
+
+    def test_an_id_where_the_name_goes_is_refused(self):
+        self.fill()
+        code, _, err = self.run_main("group", CHAN, OTHER_CHAN)
+        self.assertEqual(code, 1)
+        self.assertIn("is a conversation ID, not a group name", err)
+        self.assertNotIn("groups", self.stored())
+
+    def test_names_are_exact(self):
+        self.fill()
+        self.run_main("group", "tests")
+        _, out, _ = self.run_main("group", "TESTS")
+        self.assertEqual(out, "Created group TESTS (empty).\n")
+        self.assertEqual(sorted(self.stored()["groups"]), ["TESTS", "tests"])
+
+    def test_indexed_in_two_workspaces_is_not_guessed(self):
+        store = cd.empty()
+        cd.set_slack_name(store, TEAM, "Example", CHAN, "one")
+        cd.set_slack_name(store, OTHER_TEAM, "Another", CHAN, "two")
+        ec.save_directory(store, self.path)
+        code, out, _ = self.run_main("group", "Research", CHAN)
+        self.assertEqual(code, 1)
+        self.assertIn(f"Could not add:\n  {CHAN}  in the conversation index for "
+                      "more than one workspace", out)
+        self.assertNotIn("groups", self.stored())
+
+    def test_list_does_not_show_groups(self):
+        self.fill()
+        _, before, _ = self.run_main("list")
+        self.run_main("group", "Research", CHAN)
+        _, after, _ = self.run_main("list")
+        self.assertEqual(after, before)
+
+    # -- looking up what is not indexed --------------------------------------
+
+    def test_unindexed_is_looked_up_indexed_and_added(self):
+        self.fill()
+        code, out, _ = self.run_group("Research", "C0000000005")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.slack.calls,
+                         ["auth.test", "conversations.info C0000000005"])
+        entry = self.stored()["workspaces"][TEAM]["channels"]["C0000000005"]
+        self.assertEqual(entry, {"slack_name": "field-notes",
+                                 "kind": "public_channel"})
+        self.assertEqual(self.members(), ["C0000000005"])
+        self.assertEqual(out, "Added to Research:\n"
+                              "  C0000000005  -  field-notes\n"
+                              "\n"
+                              "Created group Research. Research now has "
+                              "1 conversation.\n")
+
+    def test_works_with_an_empty_index(self):
+        code, _, _ = self.run_group("Research", "C0000000005")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.members(), ["C0000000005"])
+
+    def test_a_new_dm_gets_no_invented_nickname(self):
+        self.run_group("Research", "D0000000003")
+        entry = self.stored()["workspaces"][TEAM]["channels"]["D0000000003"]
+        self.assertEqual(entry, {"kind": "dm"})
+
+    def test_several_new_ones_share_one_slack_check(self):
+        code, _, _ = self.run_group("Research", "D0000000003", "D0000000004",
+                                    "C0000000005")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.slack.calls.count("auth.test"), 1)
+        self.assertEqual(self.members(),
+                         ["D0000000003", "D0000000004", "C0000000005"])
+
+    def test_indexed_ones_are_not_looked_up_again(self):
+        self.fill()
+        self.run_group("Research", CHAN, "C0000000005")
+        self.assertEqual(self.slack.calls,
+                         ["auth.test", "conversations.info C0000000005"])
+
+    def test_not_found_is_added_nowhere(self):
+        self.fill()
+        before = self.path.read_text()
+        code, out, _ = self.run_group("Research", self.GONE)
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "Could not add:\n"
+                              f"  {self.GONE}  conversation not found or not "
+                              "accessible\n"
+                              "\n"
+                              "No changes - group Research was not created.\n")
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_mixed_new_already_and_not_found(self):
+        # Partial success (D45): what can be added is, and stays added.
+        self.fill()
+        self.run_main("group", "Research", CHAN)
+        code, out, _ = self.run_group("Research", "D0000000003", CHAN, self.GONE)
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "Added to Research:\n"
+                              "  D0000000003  -              (DM)\n"
+                              "\n"
+                              "Already in Research:\n"
+                              f"  {CHAN}  Planning Team  project-planning\n"
+                              "\n"
+                              "Could not add:\n"
+                              f"  {self.GONE}  conversation not found or not "
+                              "accessible\n"
+                              "\n"
+                              "Research now has 2 conversations.\n")
+        self.assertEqual(self.members(), [CHAN, "D0000000003"])
+        self.assertNotIn(self.GONE, self.stored()["workspaces"][TEAM]["channels"])
+
+    def test_other_slack_errors_are_reported_as_they_are(self):
+        slack = FakeSlack(self.CONVERSATIONS)
+        slack.conversations_info = mock.Mock(side_effect=ec.SlackApiError(
+            "x", {"error": "ratelimited"}))
+        code, out, _ = self.run_group("Research", "C0000000005", slack=slack)
+        self.assertEqual(code, 1)
+        self.assertIn("C0000000005  Slack could not look it up (ratelimited)", out)
+
+    def test_read_only_check_still_guards_group(self):
+        slack = FakeSlack(self.CONVERSATIONS, scopes=GOOD_SCOPES + ",chat:write")
+        code, _, err = self.run_group("Research", "C0000000005", slack=slack)
+        self.assertEqual(code, 1)
+        self.assertIn("unexpected scope", err)
+        self.assertEqual(slack.calls, ["auth.test"])
+        self.assertFalse(self.path.exists())
+
+    def test_a_failed_write_leaves_neither_index_nor_group_changed(self):
+        # The new index entry and its group membership are one write: if it
+        # fails, the file on disk is exactly as it was.
+        self.fill()
+        before = self.path.read_text()
+        with mock.patch.object(ec, "write_atomic", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                self.run_group("Research", "C0000000005")
+        self.assertEqual(self.path.read_text(), before)
 
 
 class SaveCommandTests(CommandTest):

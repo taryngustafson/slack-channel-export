@@ -225,7 +225,7 @@ def record_export(data: dict, team_id: str, team_name: str, channel_id: str,
 
 
 class NotSaved(ValueError):
-    """The conversation is not in the saved list, so it cannot join a group."""
+    """The conversation is not in the conversation index, so it cannot join a group."""
 
     def __init__(self, team_id: str, channel_id: str):
         super().__init__(f"{channel_id} is not saved")
@@ -257,13 +257,13 @@ def create_group(data: dict, name: str) -> str:
 
 
 def add_to_group(data: dict, name: str, team_id: str, channel_id: str) -> str:
-    """Put a saved conversation in group `name`, making the group if it is new.
+    """Put an indexed conversation in group `name`, making the group if it is new.
     Changes `data` in place.
 
     Returns "added", or "already in" when it was a member already - adding only
     ever adds, never replaces. Raises NotSaved, changing nothing, when the
-    conversation is not in the saved list: a group is a list of saved
-    conversations, and `save` is what checks with Slack that an ID is real.
+    conversation is not in the conversation index: every group member is also in
+    the index, so the caller must add it there first (`group` does, via Slack).
     """
     name = _group_name(name)
     if channel_id not in data["workspaces"].get(team_id, {}).get("channels", {}):
@@ -274,6 +274,17 @@ def add_to_group(data: dict, name: str, team_id: str, channel_id: str) -> str:
         return "already in"
     members.append(member)
     return "added"
+
+
+def saved_in(data: dict, channel_id: str) -> list:
+    """The team IDs of every workspace where `channel_id` is saved, sorted.
+
+    Lets `group` skip Slack for anything already indexed: the conversation index
+    already knows each conversation's workspace. Usually one; none means not saved; more than one is possible, since
+    IDs are unique only within a workspace, and the caller must not guess.
+    """
+    return sorted(team_id for team_id, workspace in data["workspaces"].items()
+                  if channel_id in workspace["channels"])
 
 
 def _words(text: str) -> str:
