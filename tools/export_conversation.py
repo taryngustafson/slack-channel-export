@@ -3,8 +3,8 @@
 Fetches the top-level history, then makes one conversations.replies call per message
 that has replies, so nothing stays hidden inside a collapsed thread. Resolves the
 participants' names, renders threads inline, and writes three files: a plain text
-transcript, a Markdown document, and Slack's raw response. The Markdown goes on the
-clipboard.
+transcript, a Markdown document, and Slack's raw response. With --copy, the
+Markdown is also copied to the clipboard.
 
 The two readable files land in exports/ unless --out sends them somewhere else. The
 raw response always stays in exports/raw/: it is the archive the renderers replay to
@@ -22,7 +22,7 @@ conversation named on the command line - it never enumerates the workspace.
 
     slack-export C0123456789
     slack-export C0123456789 Project Planning   # name the output file
-    slack-export D0123456789 --no-clipboard
+    slack-export D0123456789 --copy                # also copy the Markdown
     slack-export C0123456789 --out ~/Desktop        # put the .md and .txt there
     slack-export C0123456789                        # again later: append what is new
 
@@ -786,6 +786,14 @@ COMMANDS = {
 }
 
 
+def copy_to_clipboard(document, wanted: bool) -> bool:
+    """Put `document` on the clipboard, only if `wanted` (--copy) and there is
+    something to copy. Returns whether it was copied."""
+    if not (wanted and document):
+        return False
+    return subprocess.run(["pbcopy"], input=document, text=True).returncode == 0
+
+
 def main() -> None:
     argv = sys.argv[1:]
     if argv and argv[0] in COMMANDS:
@@ -798,7 +806,7 @@ def main() -> None:
         # What someone needs to type first is the conversation, so that comes
         # first; the flags are optional and can go in any order after it.
         usage="slack-export conversation_id [name ...] "
-              "[--out DIR] [--no-threads] [--no-clipboard]\n"
+              "[--out DIR] [--no-threads] [--copy]\n"
               "       slack-export save conversation_id [nickname ...]\n"
               "       slack-export list [search ...]",
         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -817,8 +825,15 @@ def main() -> None:
                         help="top-level messages only, skipping thread replies "
                              "(much faster, but most of a busy channel is in "
                              "the threads)")
+    # Off by default: a long export pasted by surprise can flood or freeze
+    # whatever it lands in.
+    parser.add_argument("--copy", action="store_true",
+                        help="also copy the Markdown to the clipboard "
+                             "(default: do not)")
+    # The old opt-out, from when copying was automatic. Still accepted, silently,
+    # so a habit or script that types it keeps working; it changes nothing now.
     parser.add_argument("--no-clipboard", action="store_true",
-                        help="write the files but do not copy to the clipboard")
+                        help=argparse.SUPPRESS)
     parser.add_argument("--out", metavar="DIR",
                         help="where to put the .md and .txt "
                              "(default: exports/; the .raw.json archive always "
@@ -1015,10 +1030,7 @@ def main() -> None:
         auth, info, args.conversation_id, stem,
         datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
-    copied = False
-    if not args.no_clipboard and document:
-        copied = subprocess.run(["pbcopy"], input=document,
-                                text=True).returncode == 0
+    copied = copy_to_clipboard(document, args.copy)
 
     print()
     print("=" * 63)
@@ -1049,7 +1061,12 @@ def main() -> None:
               f"   [{detail}, {size}]")
     print(f"  ARCHIVE  : {display_path(raw_path)}"
           f"   ({raw_path.stat().st_size / 1024:.1f} KB)")
-    print(f"  clipboard: {'copied - ready to paste' if copied else 'skipped'}")
+    if copied:
+        print("  clipboard: copied - ready to paste")
+    elif args.copy:
+        print("  clipboard: not copied (nothing new, or pbcopy failed)")
+    else:
+        print("  clipboard: not copied (add --copy to copy the Markdown)")
     print(f"  saved list: {listed}")
 
     if any(what.startswith("SKIPPED") for _, what, _ in written):
