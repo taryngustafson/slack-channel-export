@@ -1129,7 +1129,8 @@ class GroupCommandTests(CommandTest):
 
 
 class GroupRemoveDeleteTests(CommandTest):
-    """`group NAME --remove ID ...` and `group NAME --delete` (D55). run_main fails
+    """`group NAME --remove ID ...`, `group NAME --delete` (D55) and
+    `group NAME --list`. run_main fails
     the test on any Keychain or Slack use, so every test here also proves the
     command stayed local."""
 
@@ -1313,13 +1314,93 @@ class GroupRemoveDeleteTests(CommandTest):
     def test_remove_and_delete_together_is_refused(self):
         code, _, err = self.run_main("group", "Research", "--remove", CHAN, "--delete")
         self.assertEqual(code, 2)
-        self.assertIn("not both", err)
+        self.assertIn("use only one of", err)
         self.assertEqual(self.members(), [CHAN, self.DM])
 
     def test_remove_without_ids_is_refused(self):
         code, _, err = self.run_main("group", "Research", "--remove")
         self.assertEqual(code, 2)
         self.assertIn("--remove needs the conversation IDs", err)
+
+    # -- --list ---------------------------------------------------------------
+
+    def test_list_prints_what_list_groups_prints(self):
+        code, out, _ = self.run_main("group", "Research", "--list")
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "ID           NICKNAME    SLACK NAME\n"
+                              "D0000000003  Alex        (DM)\n"
+                              f"{CHAN}  [Planning]  project-planning\n")
+        _, same, _ = self.run_main("list", "--groups", "Research")
+        self.assertEqual(out, same)
+
+    def test_list_before_the_name_also_works(self):
+        _, expected, _ = self.run_main("group", "Research", "--list")
+        code, out, _ = self.run_main("group", "--list", "Research")
+        self.assertEqual((code, out), (0, expected))
+
+    def test_list_changes_nothing(self):
+        before = self.path.read_text()
+        self.run_main("group", "Research", "--list")
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_list_an_empty_group(self):
+        code, out, _ = self.run_main("group", "Ideas", "--list")
+        self.assertEqual((code, out), (0, "Ideas has no conversations yet.\n"))
+
+    def test_list_a_name_with_spaces(self):
+        code, out, _ = self.run_main("group", "Lab Notes", "--list")
+        self.assertEqual(code, 0)
+        self.assertIn(CHAN, out)
+        self.assertNotIn(self.DM, out)
+
+    def test_list_an_unknown_group_errors_and_creates_nothing(self):
+        before = self.path.read_text()
+        code, out, err = self.run_main("group", "Nope", "--list")
+        self.assertEqual((code, out), (1, ""))
+        self.assertEqual(err, "No group named 'Nope'.")
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_list_hints_at_a_case_only_match(self):
+        code, _, err = self.run_main("group", "research", "--list")
+        self.assertEqual(code, 1)
+        self.assertIn("Did you mean 'Research'?", err)
+
+    def test_list_without_a_name_prints_what_list_groups_prints(self):
+        code, out, _ = self.run_main("group", "--list")
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "GROUP      CONVERSATIONS\n"
+                              "Ideas      0\n"
+                              "Lab Notes  1\n"
+                              "Research   2\n")
+        _, same, _ = self.run_main("list", "--groups")
+        self.assertEqual(out, same)
+
+    def test_list_without_a_name_and_no_groups_says_how_to_make_one(self):
+        ec.save_directory(cd.empty(), self.path)
+        code, out, _ = self.run_main("group", "--list")
+        self.assertEqual((code, out), (0, "You have no groups yet.\n"
+                                          "To make one: slack-export group <name>\n"))
+
+    def test_no_name_is_refused_without_list(self):
+        before = self.path.read_text()
+        for argv in ([], ["--delete"], ["--remove"]):
+            code, _, err = self.run_main("group", *argv)
+            self.assertEqual(code, 2)
+            self.assertIn("a group name is needed", err)
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_list_with_ids_is_refused(self):
+        code, _, err = self.run_main("group", "Research", "--list", OTHER_CHAN)
+        self.assertEqual(code, 2)
+        self.assertIn("--list lists the whole group", err)
+        self.assertEqual(self.members(), [CHAN, self.DM])
+
+    def test_list_with_remove_or_delete_is_refused(self):
+        for extra in (["--delete"], ["--remove", CHAN]):
+            code, _, err = self.run_main("group", "Research", "--list", *extra)
+            self.assertEqual(code, 2)
+            self.assertIn("use only one of", err)
+        self.assertEqual(self.members(), [CHAN, self.DM])
 
 
 class SaveCommandTests(CommandTest):

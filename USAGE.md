@@ -532,7 +532,7 @@ This deletes only the group. Its conversations stay in your conversation index w
 
 `--delete` takes no conversation IDs, and `--remove` and `--delete` cannot be used together.
 
-Both `--remove` and `--delete` work entirely from your conversation index: they never contact Slack or read your Slack token. They only work on a group that exists, and group names are exact, so a name that differs only in capitalization gets a hint instead:
+`--remove`, `--delete` and `--list` (see [Browse your groups](#browse-your-groups)) all work entirely from your conversation index: they never contact Slack or read your Slack token. They only work on a group that exists, and group names are exact, so a name that differs only in capitalization gets a hint instead:
 
 ```text
 No group named 'research'.
@@ -546,6 +546,8 @@ To see all your groups, and how many conversations each has:
 ```sh
 slack-export list --groups
 ```
+
+`slack-export group --list` prints the same thing.
 
 ```text
 GROUP      CONVERSATIONS
@@ -567,7 +569,11 @@ D0123456789  Alex      (DM)
 C0123456789  -         project-planning
 ```
 
-This is the same table, in the same order, as `slack-export list`, limited to that group. A group with nothing in it says so:
+This is the same table, in the same order, as `slack-export list`, limited to that group.
+
+`slack-export group Research --list` prints exactly the same thing. It takes one group and no search; for several groups at once, or to search within one, use `list --groups`.
+
+A group with nothing in it says so:
 
 ```text
 Ideas has no conversations yet.
