@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
@@ -33,6 +34,9 @@ HERMETIC_GIT = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 TEAM, OTHER_TEAM = "T0000000001", "T0000000002"
 CHAN, OTHER_CHAN = "C0000000001", "C0000000002"
 WHEN, LATER = "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z"
+# The time every command test runs "at", so an age in `list` never depends on the
+# day the tests are run: WHEN is 4 days before it.
+NOW = datetime(2026, 1, 5, tzinfo=timezone.utc)
 
 
 def mode(path) -> int:
@@ -618,6 +622,7 @@ class CommandTest(TempStoreTest):
         with mock.patch.object(ec, "DIRECTORY_PATH", self.path), \
                 mock.patch.object(ec, "keychain_token", forbidden), \
                 mock.patch.object(ec, "WebClient", forbidden), \
+                mock.patch.object(cd, "_now", lambda: NOW), \
                 mock.patch.object(sys, "argv", ["slack-export", *argv]), \
                 redirect_stdout(out), redirect_stderr(err):
             try:
@@ -637,15 +642,77 @@ class CommandTest(TempStoreTest):
 
 
 
+class AgeTextTests(unittest.TestCase):
+    """How a stored export time is worded in `list`'s LAST EXPORTED column."""
+
+    def age(self, **ago):
+        when = (NOW - timedelta(**ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return cd.age_text(when, NOW)
+
+    def test_each_unit_and_where_it_changes(self):
+        for ago, expected in (
+                ({"seconds": 0}, "just now"),
+                ({"seconds": 59}, "just now"),
+                ({"seconds": 60}, "1 minute ago"),
+                ({"minutes": 59}, "59 minutes ago"),
+                ({"minutes": 60}, "1 hour ago"),
+                ({"hours": 23}, "23 hours ago"),
+                ({"hours": 24}, "1 day ago"),
+                ({"hours": 47}, "1 day ago"),
+                ({"days": 13}, "13 days ago"),
+                ({"days": 14}, "2 weeks ago"),
+                ({"days": 62}, "8 weeks ago"),
+                ({"days": 63}, "2 months ago"),
+                ({"days": 729}, "24 months ago"),
+                ({"days": 730}, "2 years ago")):
+            with self.subTest(ago=ago):
+                self.assertEqual(self.age(**ago), expected)
+
+    def test_a_time_ahead_of_the_clock_is_just_now(self):
+        self.assertEqual(self.age(hours=-3), "just now")
+
+    def test_an_unreadable_time_is_shown_as_stored(self):
+        self.assertEqual(cd.age_text("last tuesday", NOW), "last tuesday")
+
+
 class ListCommandTests(CommandTest):
+
+    def test_last_exported_is_the_most_recent_export_under_any_name(self):
+        store = cd.empty()
+        cd.set_slack_name(store, TEAM, "Example", CHAN, "project-planning")
+        cd.record_export(store, TEAM, "Example", CHAN, "Planning", LATER)
+        cd.record_export(store, TEAM, "Example", CHAN, "Another-Name", WHEN)
+        cd.set_slack_name(store, TEAM, "Example", OTHER_CHAN, "lab-notes")
+        ec.save_directory(store, self.path)
+        code, out, _ = self.run_main("list")
+        self.assertEqual(code, 0)
+        self.assertEqual(out,
+                         "ID           NICKNAME    SLACK NAME        LAST EXPORTED\n"
+                         f"{OTHER_CHAN}  -           lab-notes         -\n"
+                         f"{CHAN}  [Planning]  project-planning  3 days ago\n")
+        # The exact times are still what is stored; only the wording is relative.
+        exports = json.loads(self.path.read_text())[
+            "workspaces"][TEAM]["channels"][CHAN]["exports"]
+        self.assertEqual(exports, {"Planning": {"last_export_utc": LATER},
+                                   "Another-Name": {"last_export_utc": WHEN}})
+
+    def test_the_age_is_not_searched(self):
+        store = cd.empty()
+        cd.set_slack_name(store, TEAM, "Example", CHAN, "project-planning")
+        cd.record_export(store, TEAM, "Example", CHAN, "Planning", WHEN)
+        ec.save_directory(store, self.path)
+        for word in ("ago", "days", "4 days ago"):
+            with self.subTest(word=word):
+                code, out, _ = self.run_main("list", word)
+                self.assertEqual((code, out), (1, ""))
 
     def test_lists_id_nickname_and_slack_name(self):
         self.fill()
         code, out, _ = self.run_main("list")
         self.assertEqual(code, 0)
-        self.assertEqual(out, "ID           NICKNAME       SLACK NAME\n"
-                              f"{OTHER_CHAN}  -              lab-notes\n"
-                              f"{CHAN}  Planning Team  project-planning\n")
+        self.assertEqual(out, "ID           NICKNAME       SLACK NAME        LAST EXPORTED\n"
+                              f"{OTHER_CHAN}  -              lab-notes         -\n"
+                              f"{CHAN}  Planning Team  project-planning  -\n")
 
     def test_retired_nicknames_flag_is_still_accepted(self):
         self.fill()
@@ -658,20 +725,20 @@ class ListCommandTests(CommandTest):
     def test_a_search_shows_the_nickname_that_matched(self):
         self.fill()
         _, out, _ = self.run_main("list", "team")
-        self.assertEqual(out, "ID           NICKNAME       SLACK NAME\n"
-                              f"{CHAN}  Planning Team  project-planning\n")
+        self.assertEqual(out, "ID           NICKNAME       SLACK NAME        LAST EXPORTED\n"
+                              f"{CHAN}  Planning Team  project-planning  -\n")
 
     def test_search_words_are_joined_without_quotes(self):
         self.fill()
         _, out, _ = self.run_main("list", "project", "PLAN")
-        self.assertEqual(out, "ID           NICKNAME       SLACK NAME\n"
-                              f"{CHAN}  Planning Team  project-planning\n")
+        self.assertEqual(out, "ID           NICKNAME       SLACK NAME        LAST EXPORTED\n"
+                              f"{CHAN}  Planning Team  project-planning  -\n")
 
     def test_search_by_id(self):
         self.fill()
         _, out, _ = self.run_main("list", OTHER_CHAN)
-        self.assertEqual(out, "ID           NICKNAME  SLACK NAME\n"
-                              f"{OTHER_CHAN}  -         lab-notes\n")
+        self.assertEqual(out, "ID           NICKNAME  SLACK NAME  LAST EXPORTED\n"
+                              f"{OTHER_CHAN}  -         lab-notes   -\n")
 
     def test_no_match_exits_1_like_grep(self):
         self.fill()
@@ -751,16 +818,16 @@ class ListGroupsCommandTests(CommandTest):
         # The same lines plain `list` prints for these three, in the same order.
         _, everything, _ = self.run_main("list")
         self.assertEqual(out, everything)
-        self.assertEqual(out, "ID           NICKNAME       SLACK NAME\n"
-                              "D0000000003  Alex           (DM)\n"
-                              f"{OTHER_CHAN}  -              lab-notes\n"
-                              f"{CHAN}  Planning Team  project-planning\n")
+        self.assertEqual(out, "ID           NICKNAME       SLACK NAME        LAST EXPORTED\n"
+                              "D0000000003  Alex           (DM)              -\n"
+                              f"{OTHER_CHAN}  -              lab-notes         -\n"
+                              f"{CHAN}  Planning Team  project-planning  -\n")
 
     def test_members_only_from_the_named_group(self):
         self.fill_groups()
         _, out, _ = self.run_main("list", "--groups", "Work")
-        self.assertEqual(out, "ID           NICKNAME       SLACK NAME\n"
-                              f"{CHAN}  Planning Team  project-planning\n")
+        self.assertEqual(out, "ID           NICKNAME       SLACK NAME        LAST EXPORTED\n"
+                              f"{CHAN}  Planning Team  project-planning  -\n")
 
     def test_a_name_with_spaces_works_when_quoted(self):
         self.fill_groups()
@@ -781,12 +848,16 @@ class ListGroupsCommandTests(CommandTest):
         self.fill_groups()
         code, out, _ = self.run_main("list", "--groups", "Work", "Lab Notes")
         self.assertEqual(code, 0)
-        self.assertEqual(out, "ID           NICKNAME       SLACK NAME        GROUPS\n"
-                              f"{OTHER_CHAN}  -              lab-notes         Lab Notes\n"
-                              f"{CHAN}  Planning Team  project-planning  Work\n")
+        self.assertEqual(out, "ID           NICKNAME       SLACK NAME        LAST EXPORTED  GROUPS\n"
+                              f"{OTHER_CHAN}  -              lab-notes         -              "
+                              "Lab Notes\n"
+                              f"{CHAN}  Planning Team  project-planning  -              "
+                              "Work\n")
         _, out, _ = self.run_main("list", "--groups", "Work", "Research")
-        self.assertIn(f"{CHAN}  Planning Team  project-planning  Work, Research\n", out)
-        self.assertIn("D0000000003  Alex           (DM)              Research\n", out)
+        self.assertIn(f"{CHAN}  Planning Team  project-planning  -              "
+                      "Work, Research\n", out)
+        self.assertIn("D0000000003  Alex           (DM)              -              "
+                      "Research\n", out)
 
     def test_one_group_has_no_groups_column(self):
         self.fill_groups()
@@ -825,8 +896,8 @@ class ListGroupsCommandTests(CommandTest):
         code, out, _ = self.run_main("list", "--groups", "Research",
                                      "--search", "planning")
         self.assertEqual(code, 0)
-        self.assertEqual(out, "ID           NICKNAME       SLACK NAME\n"
-                              f"{CHAN}  Planning Team  project-planning\n")
+        self.assertEqual(out, "ID           NICKNAME       SLACK NAME        LAST EXPORTED\n"
+                              f"{CHAN}  Planning Team  project-planning  -\n")
 
     def test_search_within_a_group_with_no_match(self):
         self.fill_groups()
@@ -847,8 +918,8 @@ class ListGroupsCommandTests(CommandTest):
         self.fill()
         code, out, _ = self.run_main("list", "planning")
         self.assertEqual(code, 0)
-        self.assertEqual(out, "ID           NICKNAME       SLACK NAME\n"
-                              f"{CHAN}  Planning Team  project-planning\n")
+        self.assertEqual(out, "ID           NICKNAME       SLACK NAME        LAST EXPORTED\n"
+                              f"{CHAN}  Planning Team  project-planning  -\n")
 
     def test_positional_search_with_groups_is_refused_with_the_fix(self):
         self.fill_groups()
@@ -1327,9 +1398,9 @@ class GroupRemoveDeleteTests(CommandTest):
     def test_list_prints_what_list_groups_prints(self):
         code, out, _ = self.run_main("group", "Research", "--list")
         self.assertEqual(code, 0)
-        self.assertEqual(out, "ID           NICKNAME    SLACK NAME\n"
-                              "D0000000003  Alex        (DM)\n"
-                              f"{CHAN}  [Planning]  project-planning\n")
+        self.assertEqual(out, "ID           NICKNAME    SLACK NAME        LAST EXPORTED\n"
+                              "D0000000003  Alex        (DM)              -\n"
+                              f"{CHAN}  [Planning]  project-planning  4 days ago\n")
         _, same, _ = self.run_main("list", "--groups", "Research")
         self.assertEqual(out, same)
 

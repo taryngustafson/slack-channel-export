@@ -152,10 +152,12 @@ slack-export list
 ```
 
 ```text
-ID           NICKNAME  SLACK NAME
-D0123456789  Alex      (DM)
-C0123456789  -         project-planning
+ID           NICKNAME  SLACK NAME        LAST EXPORTED
+D0123456789  Alex      (DM)              3 weeks ago
+C0123456789  -         project-planning  2 days ago
 ```
+
+The last column shows how long ago you last exported each conversation, so you can see which exports are getting old.
 
 You can search your conversation index by name or ID:
 

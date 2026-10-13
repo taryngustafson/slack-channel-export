@@ -286,15 +286,15 @@ If the conversation index cannot be updated, the export itself is still complete
 slack-export list
 ```
 
-This shows each conversation in your conversation index in three columns: its ID, your nickname for it, and its Slack channel name.
+This shows each conversation in your conversation index in four columns: its ID, your nickname for it, its Slack channel name, and how long ago you last exported it.
 
 ```text
-ID           NICKNAME               SLACK NAME
-D0123456789  Alex                   (DM)
-C0234567890  Bench Work             lab-notes
-C0123456789  -                      project-planning
-D0987654321  [Sam-Lee]              (DM)
-C0345678901  [Trip-Planning-Group]  (DM)
+ID           NICKNAME               SLACK NAME        LAST EXPORTED
+D0123456789  Alex                   (DM)              3 weeks ago
+C0234567890  Bench Work             lab-notes         -
+C0123456789  -                      project-planning  2 days ago
+D0987654321  [Sam-Lee]              (DM)              5 hours ago
+C0345678901  [Trip-Planning-Group]  (DM)              4 months ago
 ```
 
 The output is sorted by Slack channel name. A conversation without one, such as a DM, is sorted by its nickname instead.
@@ -313,6 +313,10 @@ The nickname column shows:
 
 The Slack channel name column shows the name Slack gives the conversation. DMs do not have Slack channel names, so a DM shows `(DM)`. A group DM technically has an internal Slack name beginning with `mpdm-`, but that is not very useful to a person, so it also shows as `(DM)` unless someone has given the group DM a name. A normal Slack channel whose actual name starts with `mpdm-` is still shown normally.
 
+The last-exported column shows how long ago the conversation was most recently exported, under any file name: `just now`, then minutes, hours, days (up to 13), weeks (up to 8), months, and years. A `-` means it has never been exported, only saved or added to a group.
+
+This is when *you* last ran an export, not whether Slack has new messages since. A quiet channel exported a month ago shows `1 month ago` even if nothing has been posted. The exact date and time of each export is kept in the conversation index; only the wording here is rounded.
+
 ### Search the conversation index
 
 Add a search after `list`:
@@ -321,7 +325,7 @@ Add a search after `list`:
 slack-export list planning
 ```
 
-You can search by conversation ID or by the names `list` shows.
+You can search by conversation ID or by the names `list` shows. The last-exported column is not searched.
 
 `--search` does the same thing, spelled out:
 
@@ -332,9 +336,9 @@ slack-export list --search planning
 It is needed when searching within groups (see [Browse your groups](#browse-your-groups)).
 
 ```text
-ID           NICKNAME               SLACK NAME
-C0123456789  -                      project-planning
-C0345678901  [Trip-Planning-Group]  (DM)
+ID           NICKNAME               SLACK NAME        LAST EXPORTED
+C0123456789  -                      project-planning  2 days ago
+C0345678901  [Trip-Planning-Group]  (DM)              4 months ago
 ```
 
 For normal words, search ignores case and differences such as spaces or punctuation. For example, these both find the same name:
@@ -563,10 +567,10 @@ slack-export list --groups Research
 ```
 
 ```text
-ID           NICKNAME  SLACK NAME
-D0987654321  -         (DM)
-D0123456789  Alex      (DM)
-C0123456789  -         project-planning
+ID           NICKNAME  SLACK NAME        LAST EXPORTED
+D0987654321  -         (DM)              -
+D0123456789  Alex      (DM)              3 weeks ago
+C0123456789  -         project-planning  2 days ago
 ```
 
 This is the same table, in the same order, as `slack-export list`, limited to that group.
@@ -586,11 +590,11 @@ slack-export list --groups Research "Lab Notes"
 ```
 
 ```text
-ID           NICKNAME  SLACK NAME        GROUPS
-D0987654321  -         (DM)              Research
-D0123456789  Alex      (DM)              Research
-C0123456789  -         project-planning  Research, Lab Notes
-D0234567890  Sam       (DM)              Lab Notes
+ID           NICKNAME  SLACK NAME        LAST EXPORTED  GROUPS
+D0987654321  -         (DM)              -              Research
+D0123456789  Alex      (DM)              3 weeks ago    Research
+C0123456789  -         project-planning  2 days ago     Research, Lab Notes
+D0234567890  Sam       (DM)              6 days ago     Lab Notes
 ```
 
 Group names are exact. A name that matches an existing group except for capitalization gets a hint:
@@ -607,8 +611,8 @@ slack-export list --groups Research --search planning
 ```
 
 ```text
-ID           NICKNAME  SLACK NAME
-C0123456789  -         project-planning
+ID           NICKNAME  SLACK NAME        LAST EXPORTED
+C0123456789  -         project-planning  2 days ago
 ```
 
 With `--groups`, search words must come after `--search`. Words typed straight after `list` are refused rather than guessed at, since their meaning would otherwise depend on where they appear:

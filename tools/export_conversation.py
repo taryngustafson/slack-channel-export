@@ -707,8 +707,9 @@ def list_command(argv) -> None:
         # Line breaks written out, since RawDescriptionHelpFormatter keeps them as
         # they are - it is what lets the paragraphs stay separate.
         description="Print every conversation in your conversation index, one per\n"
-                    "line, under a header naming the three columns: its ID, your\n"
-                    "nickname for it, and its Slack channel name. Sorted by Slack\n"
+                    "line, under a header naming the four columns: its ID, your\n"
+                    "nickname for it, its Slack channel name, and how long ago\n"
+                    "you last exported it. Sorted by Slack\n"
                     "channel name, or by nickname for a conversation Slack gives\n"
                     "no name, such as a 1:1 DM.\n\n"
                     "With no nickname, the nickname column shows the name of its\n"
@@ -716,7 +717,10 @@ def list_command(argv) -> None:
                     "unless that export was given no name. A DM has no Slack\n"
                     "channel name, so it shows as (DM) - unless it is a group DM\n"
                     "someone has named.\n"
-                    "A '-' marks an empty column.\n\n"
+                    "LAST EXPORTED is when an export last ran, under any file name\n"
+                    "- not whether Slack has anything newer. It is not searched.\n"
+                    "A '-' marks an empty column, such as a conversation never\n"
+                    "exported.\n\n"
                     "--groups alone lists your groups and how many conversations\n"
                     "each has. With group names, it lists the conversations in\n"
                     "those groups instead; add --search to search within them.\n"
@@ -773,6 +777,7 @@ def list_command(argv) -> None:
         print("Your conversation index is empty.")
         return
     for line in channel_directory.format_rows(channel_directory.sort_rows(rows),
+                                              channel_directory.LIST_COLUMNS,
                                               header=True):
         print(line)
 
@@ -827,7 +832,7 @@ def _list_groups(store: dict, names: list, term) -> None:
     if not rows:
         where = names[0] if len(names) == 1 else "these groups"
         sys.exit(f"No conversation in {where} matches '{term}'.")
-    columns = channel_directory.DEFAULT_COLUMNS
+    columns = channel_directory.LIST_COLUMNS
     if len(names) > 1:
         # Every conversation in ANY of the groups is listed once; this column says
         # which of the named groups it is in, in the order they were typed.

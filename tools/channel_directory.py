@@ -64,6 +64,7 @@ is ever written into an export.
 """
 
 import re
+from datetime import datetime, timezone
 
 VERSION = 1
 
@@ -492,18 +493,73 @@ def list_slack_name(row: dict) -> str:
     return ""
 
 
+def _now() -> datetime:
+    """The current time. Its own function so tests can hold the clock still."""
+    return datetime.now(timezone.utc)
+
+
+# How an age is worded: the first unit it is still under the limit of, counted in
+# whole units of `seconds`. Coarser as it gets older, since "9 weeks ago" and
+# "63 days ago" say the same thing about how stale an export is.
+AGE_UNITS = (
+    # (below this many seconds, seconds per unit, unit)
+    (3600, 60, "minute"),
+    (86400, 3600, "hour"),
+    (14 * 86400, 86400, "day"),
+    (63 * 86400, 7 * 86400, "week"),
+    (730 * 86400, 30 * 86400, "month"),
+    (float("inf"), 365 * 86400, "year"),
+)
+
+
+def age_text(when_utc: str, now: datetime) -> str:
+    """How long before `now` a stored time was, in words: "3 days ago".
+
+    Only the wording is relative. The store keeps the exact time (UTC, to the
+    second), so the column can be shown another way later without losing anything.
+    A time that cannot be read is shown as it is stored rather than hidden.
+    """
+    try:
+        then = datetime.strptime(when_utc, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return when_utc
+    seconds = (now - then.replace(tzinfo=timezone.utc)).total_seconds()
+    # Under a minute - or ahead of this clock, which only a changed clock explains.
+    if seconds < 60:
+        return "just now"
+    for limit, per_unit, unit in AGE_UNITS:
+        if seconds < limit:
+            count = int(seconds // per_unit)
+            return f"{count} {unit}{'' if count == 1 else 's'} ago"
+
+
+def list_last_exported(row: dict) -> str:
+    """The last-exported column of `list`: how long ago the conversation was most
+    recently exported, under any file name. Empty if it never has been.
+
+    It says when an export last ran, not whether Slack has anything newer."""
+    when = row["last_export_utc"]
+    return age_text(when, _now()) if when else ""
+
+
 # The columns `list` can print, by name, each a function from one row to its text.
 COLUMNS = {
     "id": lambda row: row["channel_id"],
     "nickname": list_nickname,
     "slack_name": list_slack_name,
+    "last_exported": list_last_exported,
     # Only `list --groups` with several names fills this in: which of them the
     # conversation is in. Blank on any other row.
     "groups": lambda row: row.get("groups", ""),
 }
 DEFAULT_COLUMNS = ("id", "nickname", "slack_name")
+# What `list` prints. The one-line confirmations from `save`, `group` and an
+# export keep to DEFAULT_COLUMNS: they name a conversation, and say nothing about
+# when it was exported.
+LIST_COLUMNS = DEFAULT_COLUMNS + ("last_exported",)
 # The columns a search looks in. Every one of them must be on screen whenever a
-# search runs, or a line could match for a reason it does not show.
+# search runs, or a line could match for a reason it does not show. The age is
+# not one of them: its words change by the day, and "day" would match every line.
 SEARCHED = DEFAULT_COLUMNS
 
 
@@ -535,6 +591,7 @@ HEADERS = {
     "id": "ID",
     "nickname": "NICKNAME",
     "slack_name": "SLACK NAME",
+    "last_exported": "LAST EXPORTED",
     "groups": "GROUPS",
 }
 
