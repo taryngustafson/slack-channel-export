@@ -512,6 +512,15 @@ AGE_UNITS = (
 )
 
 
+def _stored_time(when_utc: str):
+    """A stored export time as a datetime, or None if it cannot be read."""
+    try:
+        then = datetime.strptime(when_utc, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return None
+    return then.replace(tzinfo=timezone.utc)
+
+
 def age_text(when_utc: str, now: datetime) -> str:
     """How long before `now` a stored time was, in words: "3 days ago".
 
@@ -519,11 +528,10 @@ def age_text(when_utc: str, now: datetime) -> str:
     second), so the column can be shown another way later without losing anything.
     A time that cannot be read is shown as it is stored rather than hidden.
     """
-    try:
-        then = datetime.strptime(when_utc, "%Y-%m-%dT%H:%M:%SZ")
-    except ValueError:
+    then = _stored_time(when_utc)
+    if then is None:
         return when_utc
-    seconds = (now - then.replace(tzinfo=timezone.utc)).total_seconds()
+    seconds = (now - then).total_seconds()
     # Under a minute - or ahead of this clock, which only a changed clock explains.
     if seconds < 60:
         return "just now"
@@ -563,21 +571,49 @@ LIST_COLUMNS = DEFAULT_COLUMNS + ("last_exported",)
 SEARCHED = DEFAULT_COLUMNS
 
 
-# The orders `list` can print in. Each is a sort key over one row. Later keys
-# break ties, so the output never depends on the order the store happens to be in.
-SORT_KEYS = {
+def _name_sort_key(row: dict) -> tuple:
     # A conversation with no real Slack name (a DM, an unnamed group DM) sorts by
     # its nickname column, so it lands among the channels by the name the user
     # sees for it rather than under "(DM)".
-    "slack_name": lambda row: (_words(real_slack_name(row) or list_nickname(row)),
-                               _words(list_nickname(row)), row["channel_id"]),
+    return (_words(real_slack_name(row) or list_nickname(row)),
+            _words(list_nickname(row)), row["channel_id"])
+
+
+def _export_sort_key(row: dict) -> tuple:
+    # Most recently exported first. A conversation never exported has no time to
+    # sort by, so those come last, in name order; one whose stored time cannot be
+    # read comes just before them. Equal times fall back to name order too.
+    when = row["last_export_utc"]
+    if not when:
+        return (2, 0, _name_sort_key(row))
+    then = _stored_time(when)
+    if then is None:
+        return (1, 0, _name_sort_key(row))
+    return (0, -then.timestamp(), _name_sort_key(row))
+
+
+def _nickname_sort_key(row: dict) -> tuple:
+    # By what the nickname column shows, so an export name in [brackets] sorts
+    # among the nicknames by its letters. A conversation with nothing in that
+    # column comes last, in name order.
+    shown = list_nickname(row)
+    return (0 if shown else 1, _words(shown), _name_sort_key(row))
+
+
+# The orders `list` can print in. Each is a sort key over one row. Later keys
+# break ties, so the output never depends on the order the store happens to be in.
+SORT_KEYS = {
+    "slack_name": _name_sort_key,
+    "export": _export_sort_key,
+    "nickname": _nickname_sort_key,
 }
 DEFAULT_SORT = "slack_name"
 
 
-def sort_rows(rows: list, by: str = DEFAULT_SORT) -> list:
-    """The rows in the named order. An unknown name is a programming error."""
-    return sorted(rows, key=SORT_KEYS[by])
+def sort_rows(rows: list, by: str = DEFAULT_SORT, reverse: bool = False) -> list:
+    """The rows in the named order, or exactly back to front if `reverse` is set.
+    An unknown name is a programming error."""
+    return sorted(rows, key=SORT_KEYS[by], reverse=reverse)
 
 
 # What an empty cell prints as. Never blank: with columns separated only by spaces,

@@ -34,6 +34,9 @@ index; `save` is for adding one without exporting it, or for giving it a nicknam
     slack-export save C0123456789 Planning Team     # ...with your own nickname
     slack-export list                   # each ID, your nickname, its Slack name
     slack-export list planning          # only those with this in an ID or a name
+    slack-export list --sort-by export  # most recently exported first
+    slack-export list --sort-by export --reverse    # ...or longest ago first
+    slack-export list --sort-by nickname            # A to Z by your nicknames
 
 Groups collect conversations under a name of your choosing. A conversation can be in
 any number of groups, or none. One not yet in the conversation index is looked up in
@@ -690,20 +693,50 @@ def _quote(word: str) -> str:
     return f'"{word}"' if " " in word else word
 
 
+# What can be typed after --sort-by, each an order in channel_directory.SORT_KEYS.
+# The default order has no word here: leaving --sort-by out is how to ask for it.
+SORT_ORDERS = ("export", "nickname")
+SORT_NEEDS_A_GROUP = ("FATAL: --sort-by and --reverse order the conversations in a "
+                      "group, so they need a group name:\n"
+                      "  slack-export list --groups <group> --sort-by export")
+
+
+def _add_sort_flags(parser) -> None:
+    """--sort-by and --reverse, the same on every command that prints the
+    conversation table."""
+    # --sort and "exported" are accepted as well, since both are natural to type.
+    parser.add_argument("--sort-by", "--sort", dest="sort_by",
+                        type=lambda word: "export" if word == "exported" else word,
+                        choices=SORT_ORDERS, metavar="{export,nickname}",
+                        help="list in another order: export, most recently "
+                             "exported first and never exported last; or "
+                             "nickname, by the nickname column, with those "
+                             "that have none last")
+    parser.add_argument("--reverse", action="store_true",
+                        help="list in the opposite order")
+
+
+def _sorted(rows: list, sort_by, reverse: bool) -> list:
+    """The rows in the order --sort-by and --reverse asked for."""
+    return channel_directory.sort_rows(
+        rows, sort_by or channel_directory.DEFAULT_SORT, reverse)
+
+
 def list_command(argv) -> None:
     """`slack-export list [search ...]`, `list --search WORD ...` and
     `list --groups [GROUP ...] [--search WORD ...]`: print conversations or
     groups from the conversation index. Offline.
 
-    Filter, sort and format are separate steps in channel_directory, so a later
-    --sort or extra column is a new flag here and a table entry there.
+    Filter, sort and format are separate steps in channel_directory, so a new
+    sort order or column is a table entry there and a choice or flag here.
     """
     parser = argparse.ArgumentParser(
         prog="slack-export list",
         usage="slack-export list [search ...]\n"
               "       slack-export list --search WORD [WORD ...]\n"
               "       slack-export list --groups [GROUP ...] "
-              "[--search WORD [WORD ...]]",
+              "[--search WORD [WORD ...]]\n"
+              "       slack-export list ... [--sort-by {export,nickname}] [--reverse]",
         # Line breaks written out, since RawDescriptionHelpFormatter keeps them as
         # they are - it is what lets the paragraphs stay separate.
         description="Print every conversation in your conversation index, one per\n"
@@ -726,6 +759,11 @@ def list_command(argv) -> None:
                     "those groups instead; add --search to search within them.\n"
                     "With several names, every conversation in any of them is\n"
                     "listed once, and a GROUPS column says which it is in.\n\n"
+                    "--sort-by export puts the most recently exported first and\n"
+                    "the never exported last. --sort-by nickname sorts by the\n"
+                    "nickname column, those with none last. --reverse turns any\n"
+                    "order back to front, so with --sort-by export the ones never\n"
+                    "exported or exported longest ago come first.\n\n"
                     "Reads only the conversation index - never the Keychain or "
                     "Slack.",
         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -746,6 +784,7 @@ def list_command(argv) -> None:
                         help="with no names, list your groups; with names, list "
                              "the conversations in those groups (names are "
                              "exact; quote a name with spaces)")
+    _add_sort_flags(parser)
     args = parser.parse_args(argv)
 
     if args.search and args.search_flag:
@@ -766,7 +805,9 @@ def list_command(argv) -> None:
 
     store = load_directory()
     if args.groups is not None:
-        _list_groups(store, args.groups, term)
+        if not args.groups and (args.sort_by or args.reverse):
+            sys.exit(SORT_NEEDS_A_GROUP)
+        _list_groups(store, args.groups, term, args.sort_by, args.reverse)
         return
 
     rows = channel_directory.search(store, term)
@@ -776,7 +817,7 @@ def list_command(argv) -> None:
             sys.exit(f"No conversation in your conversation index matches '{term}'.")
         print("Your conversation index is empty.")
         return
-    for line in channel_directory.format_rows(channel_directory.sort_rows(rows),
+    for line in channel_directory.format_rows(_sorted(rows, args.sort_by, args.reverse),
                                               channel_directory.LIST_COLUMNS,
                                               header=True):
         print(line)
@@ -793,9 +834,10 @@ def _no_such_group(store: dict, name: str) -> str:
     return message
 
 
-def _list_groups(store: dict, names: list, term) -> None:
+def _list_groups(store: dict, names: list, term, sort_by=None,
+                 reverse: bool = False) -> None:
     """`list --groups`: every group with its size, or the members of the named
-    groups, searched like `list` if a term is given."""
+    groups, searched like `list` if a term is given and in the order asked for."""
     if not names:
         if term is not None:
             sys.exit("FATAL: --search searches the conversations in a group, so "
@@ -842,7 +884,7 @@ def _list_groups(store: dict, names: list, term) -> None:
             key = (row["team_id"], row["channel_id"])
             row["groups"] = ", ".join(n for n in names if key in each[n])
         columns += ("groups",)
-    for line in channel_directory.format_rows(channel_directory.sort_rows(rows),
+    for line in channel_directory.format_rows(_sorted(rows, sort_by, reverse),
                                               columns, header=True):
         print(line)
 
@@ -995,7 +1037,8 @@ def group_command(argv) -> None:
         usage="slack-export group name [ID ...]\n"
               "       slack-export group name --remove ID [ID ...]\n"
               "       slack-export group name --delete\n"
-              "       slack-export group name --list\n"
+              "       slack-export group name --list "
+              "[--sort-by {export,nickname}] [--reverse]\n"
               "       slack-export group --list",
         # Each paragraph wrapped on its own, so the blank lines between them
         # survive (the default formatter would run them together).
@@ -1017,7 +1060,9 @@ def group_command(argv) -> None:
             "It is the same as `slack-export list --groups name`, which can "
             "also search within a group and show several groups at once. With "
             "no name, --list prints all your groups and how many conversations "
-            "each has, as `slack-export list --groups` does.",
+            "each has, as `slack-export list --groups` does. With a name, "
+            "--sort-by and --reverse choose the order, as they do for "
+            "`slack-export list`.",
             "Group names are exact: 'Research' and 'research' are two groups. "
             "Put a name with spaces in quotes.")),
         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1037,13 +1082,20 @@ def group_command(argv) -> None:
     parser.add_argument("--list", action="store_true",
                         help="list the conversations in the group - or, with "
                              "no name, all your groups - changing nothing")
+    _add_sort_flags(parser)
     # Intermixed, so `group Research --remove C0123 D0456` parses on every Python
     # this supports: plain parse_args on 3.9 takes the IDs' slot as filled (empty)
     # before it reaches --remove, and then rejects the IDs.
     args = parser.parse_intermixed_args(argv)
     if args.remove + args.delete + args.list > 1:
         parser.error("use only one of --remove, --delete and --list")
+    if (args.sort_by or args.reverse) and not args.list:
+        parser.error("--sort-by and --reverse order what --list prints, so they "
+                     "need --list")
     if args.name is None:
+        if args.sort_by or args.reverse:
+            sys.exit(SORT_NEEDS_A_GROUP.replace("list --groups <group>",
+                                                "group <group> --list"))
         if not args.list:
             parser.error("a group name is needed (only --list works without "
                          "one, to list all your groups)")
@@ -1087,7 +1139,7 @@ def group_command(argv) -> None:
             sys.exit(_no_such_group(store, name))
         if args.list:
             # One code path with `list --groups NAME`, so the two cannot drift.
-            _list_groups(store, [name], None)
+            _list_groups(store, [name], None, args.sort_by, args.reverse)
         elif args.delete:
             size = channel_directory.delete_group(store, name)
             save_directory(store)

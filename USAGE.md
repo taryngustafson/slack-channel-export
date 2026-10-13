@@ -299,6 +299,52 @@ C0345678901  [Trip-Planning-Group]  (DM)              4 months ago
 
 The output is sorted by Slack channel name. A conversation without one, such as a DM, is sorted by its nickname instead.
 
+### Change the order
+
+To see what you exported most recently first, add `--sort-by export`:
+
+```sh
+slack-export list --sort-by export
+```
+
+```text
+ID           NICKNAME               SLACK NAME        LAST EXPORTED
+D0987654321  [Sam-Lee]              (DM)              5 hours ago
+C0123456789  -                      project-planning  2 days ago
+D0123456789  Alex                   (DM)              3 weeks ago
+C0345678901  [Trip-Planning-Group]  (DM)              4 months ago
+C0234567890  Bench Work             lab-notes         -
+```
+
+Conversations that have never been exported come last, in the usual name order.
+
+`--reverse` turns any order back to front. With `--sort-by export`, that puts the conversations most in need of a fresh export at the top: first the ones never exported, then the ones exported longest ago.
+
+```sh
+slack-export list --sort-by export --reverse
+```
+
+To sort by the nickname column instead, use `--sort-by nickname`:
+
+```sh
+slack-export list --sort-by nickname
+```
+
+```text
+ID           NICKNAME               SLACK NAME        LAST EXPORTED
+D0123456789  Alex                   (DM)              3 weeks ago
+C0234567890  Bench Work             lab-notes         -
+D0987654321  [Sam-Lee]              (DM)              5 hours ago
+C0345678901  [Trip-Planning-Group]  (DM)              4 months ago
+C0123456789  -                      project-planning  2 days ago
+```
+
+This sorts by what the column shows, so an export name in `[brackets]` is sorted by its letters along with your own nicknames. Conversations with nothing in the column come last. Add `--reverse` for Z to A, which also moves the ones with nothing in the column to the top.
+
+On its own, `--reverse` gives the normal order from Z to A.
+
+Both flags also work with a search, with `list --groups <group>`, and with `group <group> --list`. `--sort` is accepted as a shorter spelling of `--sort-by`.
+
 `list` is completely local. It reads the saved file only and does not contact Slack or read your Slack token, so it also works offline.
 
 ### What the columns show
@@ -575,7 +621,7 @@ C0123456789  -         project-planning  2 days ago
 
 This is the same table, in the same order, as `slack-export list`, limited to that group.
 
-`slack-export group Research --list` prints exactly the same thing. It takes one group and no search; for several groups at once, or to search within one, use `list --groups`.
+`slack-export group Research --list` prints exactly the same thing. Both accept `--sort-by` and `--reverse` (see [Change the order](#change-the-order)). `group --list` takes one group and no search; for several groups at once, or to search within one, use `list --groups`.
 
 A group with nothing in it says so:
 

@@ -267,6 +267,30 @@ class SortAndFormatTests(unittest.TestCase):
         self.assertEqual([r["channel_id"] for r in cd.sort_rows(rows)],
                          [CHAN, OTHER_CHAN])
 
+    def test_export_order_is_newest_first_then_never_exported_by_name(self):
+        rows = [row(CHAN, "zeta"), row(OTHER_CHAN, "alpha"),
+                row("C0000000003", "old"), row("C0000000004", "new"),
+                row("C0000000005", "unreadable")]
+        rows[2]["last_export_utc"], rows[3]["last_export_utc"] = WHEN, LATER
+        rows[4]["last_export_utc"] = "last tuesday"
+        self.assertEqual([r["slack_name"] for r in cd.sort_rows(rows, "export")],
+                         ["new", "old", "unreadable", "alpha", "zeta"])
+
+    def test_equal_export_times_fall_back_to_name_order(self):
+        rows = [row(CHAN, "beta"), row(OTHER_CHAN, "alpha")]
+        for r in rows:
+            r["last_export_utc"] = WHEN
+        self.assertEqual([r["slack_name"] for r in cd.sort_rows(rows, "export")],
+                         ["alpha", "beta"])
+
+    def test_reverse_is_the_same_order_back_to_front(self):
+        rows = [row(CHAN, "beta"), row(OTHER_CHAN, "alpha"), row("C0000000003", "old")]
+        rows[2]["last_export_utc"] = WHEN
+        for by in cd.SORT_KEYS:
+            with self.subTest(by=by):
+                self.assertEqual(cd.sort_rows(rows, by, reverse=True),
+                                 cd.sort_rows(rows, by)[::-1])
+
     def test_every_sort_order_and_column_works_on_a_search_row(self):
         # Guards the tables themselves: a new entry must accept what search returns.
         store = cd.empty()
@@ -739,6 +763,110 @@ class ListCommandTests(CommandTest):
         _, out, _ = self.run_main("list", OTHER_CHAN)
         self.assertEqual(out, "ID           NICKNAME  SLACK NAME  LAST EXPORTED\n"
                               f"{OTHER_CHAN}  -         lab-notes   -\n")
+
+    def fill_exported(self):
+        store = cd.empty()
+        cd.set_slack_name(store, TEAM, "Example", CHAN, "project-planning")
+        cd.record_export(store, TEAM, "Example", CHAN, "Planning", WHEN)
+        cd.set_slack_name(store, TEAM, "Example", OTHER_CHAN, "lab-notes")
+        cd.set_slack_name(store, TEAM, "Example", "C0000000003", "bench-work")
+        cd.record_export(store, TEAM, "Example", "C0000000003", "Bench", LATER)
+        cd.set_slack_name(store, TEAM, "Example", "C0000000004", "trip-ideas")
+        for channel in (CHAN, OTHER_CHAN, "C0000000003"):
+            cd.add_to_group(store, "Research", TEAM, channel)
+        ec.save_directory(store, self.path)
+
+    def ids(self, *argv):
+        code, out, _ = self.run_main(*argv)
+        self.assertEqual(code, 0)
+        return [line.split()[0] for line in out.splitlines()[1:]]
+
+    def test_sort_by_export_lists_newest_first_and_never_exported_last(self):
+        self.fill_exported()
+        code, out, _ = self.run_main("list", "--sort-by", "export")
+        self.assertEqual(code, 0)
+        self.assertEqual(out,
+                         "ID           NICKNAME    SLACK NAME        LAST EXPORTED\n"
+                         "C0000000003  [Bench]     bench-work        3 days ago\n"
+                         f"{CHAN}  [Planning]  project-planning  4 days ago\n"
+                         f"{OTHER_CHAN}  -           lab-notes         -\n"
+                         "C0000000004  -           trip-ideas        -\n")
+
+    def test_reverse_turns_the_order_back_to_front(self):
+        self.fill_exported()
+        self.assertEqual(self.ids("list", "--sort-by", "export", "--reverse"),
+                         ["C0000000004", OTHER_CHAN, CHAN, "C0000000003"])
+        self.assertEqual(self.ids("list", "--reverse"), self.ids("list")[::-1])
+
+    def test_sort_by_nickname_uses_the_column_and_puts_blanks_last(self):
+        store = cd.empty()
+        cd.set_slack_name(store, TEAM, "Example", CHAN, "alpha")
+        cd.set_nickname(store, TEAM, "Example", CHAN, "Zebra")
+        cd.set_slack_name(store, TEAM, "Example", OTHER_CHAN, "zulu")
+        cd.set_slack_name(store, TEAM, "Example", "C0000000003", "mike")
+        cd.record_export(store, TEAM, "Example", "C0000000003", "Bench", WHEN)
+        cd.set_slack_name(store, TEAM, "Example", "C0000000004", "bravo")
+        cd.set_nickname(store, TEAM, "Example", "D0000000005", "alex")
+        cd.set_kind(store, TEAM, "Example", "D0000000005", "dm")
+        ec.save_directory(store, self.path)
+        code, out, _ = self.run_main("list", "--sort-by", "nickname")
+        self.assertEqual(code, 0)
+        self.assertEqual(out,
+                         "ID           NICKNAME  SLACK NAME  LAST EXPORTED\n"
+                         "D0000000005  alex      (DM)        -\n"
+                         "C0000000003  [Bench]   mike        4 days ago\n"
+                         f"{CHAN}  Zebra     alpha       -\n"
+                         "C0000000004  -         bravo       -\n"
+                         f"{OTHER_CHAN}  -         zulu        -\n")
+        self.assertEqual(self.ids("list", "--sort-by", "nickname", "--reverse"),
+                         [OTHER_CHAN, "C0000000004", CHAN, "C0000000003",
+                          "D0000000005"])
+
+    def test_the_default_order_has_no_word(self):
+        self.fill_exported()
+        for word in ("name", "slack_name"):
+            with self.subTest(word=word):
+                code, out, _ = self.run_main("list", "--sort-by", word)
+                self.assertEqual((code, out), (2, ""))
+
+    def test_other_spellings_of_the_sort_flag(self):
+        self.fill_exported()
+        expected = self.ids("list", "--sort-by", "export")
+        self.assertEqual(self.ids("list", "--sort", "export"), expected)
+        self.assertEqual(self.ids("list", "--sort-by", "exported"), expected)
+        self.assertEqual(self.ids("list", "--sort-by=export"), expected)
+
+    def test_an_unknown_sort_order_is_refused(self):
+        self.fill_exported()
+        code, out, err = self.run_main("list", "--sort-by", "size")
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("'export', 'nickname'", err)
+
+    def test_sort_applies_to_a_search_and_to_group_views(self):
+        self.fill_exported()
+        self.assertEqual(self.ids("list", "e", "--sort-by", "export"),
+                         ["C0000000003", CHAN, OTHER_CHAN, "C0000000004"])
+        in_group = ["C0000000003", CHAN, OTHER_CHAN]
+        self.assertEqual(self.ids("list", "--groups", "Research", "--sort-by", "export"),
+                         in_group)
+        self.assertEqual(self.ids("group", "Research", "--list", "--sort-by", "export"),
+                         in_group)
+        self.assertEqual(self.ids("group", "Research", "--list", "--sort-by", "export",
+                                  "--reverse"), in_group[::-1])
+
+    def test_sort_flags_are_refused_where_there_is_no_table_to_order(self):
+        self.fill_exported()
+        for argv in (("list", "--groups", "--sort-by", "export"),
+                     ("list", "--groups", "--reverse"),
+                     ("group", "--list", "--sort-by", "export"),
+                     ("group", "Research", "--sort-by", "export"),
+                     ("group", "Research", "--delete", "--reverse")):
+            with self.subTest(argv=argv):
+                code, out, err = self.run_main(*argv)
+                self.assertNotEqual(code, 0)
+                self.assertEqual(out, "")
+                self.assertTrue("need a group name" in err or "need --list" in err)
+        self.assertIn("Research", json.loads(self.path.read_text())["groups"])
 
     def test_no_match_exits_1_like_grep(self):
         self.fill()
