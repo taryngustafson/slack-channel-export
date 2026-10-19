@@ -693,9 +693,19 @@ def _quote(word: str) -> str:
     return f'"{word}"' if " " in word else word
 
 
-# What can be typed after --sort-by, each an order in channel_directory.SORT_KEYS.
-# The default order has no word here: leaving --sort-by out is how to ask for it.
-SORT_ORDERS = ("export", "nickname")
+# What can be typed after --sort-by, and the order in channel_directory.SORT_KEYS
+# each one asks for. One word per order, with no second spellings.
+SORT_ORDERS = {"name": "slack_name", "nickname": "nickname", "export": "export"}
+DEFAULT_SORT_ORDER = "name"
+
+
+class _NoSuchFlag(argparse.Action):
+    """A flag that does not exist, registered only so that typing it is an error
+    naming the real one. argparse accepts any unambiguous start of a flag, so
+    without this `--sort` would quietly work as short for `--sort-by`."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        parser.error(f"there is no {option_string}; use {self.const}")
 SORT_NEEDS_A_GROUP = ("FATAL: --sort-by and --reverse order the conversations in a "
                       "group, so they need a group name:\n"
                       "  slack-export list --groups <group> --sort-by export")
@@ -704,22 +714,28 @@ SORT_NEEDS_A_GROUP = ("FATAL: --sort-by and --reverse order the conversations in
 def _add_sort_flags(parser) -> None:
     """--sort-by and --reverse, the same on every command that prints the
     conversation table."""
-    # --sort and "exported" are accepted as well, since both are natural to type.
-    parser.add_argument("--sort-by", "--sort", dest="sort_by",
-                        type=lambda word: "export" if word == "exported" else word,
-                        choices=SORT_ORDERS, metavar="{export,nickname}",
-                        help="list in another order: export, most recently "
-                             "exported first and never exported last; or "
-                             "nickname, by the nickname column, with those "
-                             "that have none last")
+    parser.add_argument("--sort-by", choices=tuple(SORT_ORDERS),
+                        default=DEFAULT_SORT_ORDER, metavar="{name,nickname,export}",
+                        help="the order to list in. name (the default): by "
+                             "Slack channel name, or by nickname for a "
+                             "conversation Slack gives no name. nickname: by "
+                             "the nickname column, those with none last. "
+                             "export: most recently exported first, never "
+                             "exported last")
+    parser.add_argument("--sort", action=_NoSuchFlag, nargs="?", const="--sort-by",
+                        help=argparse.SUPPRESS)
     parser.add_argument("--reverse", action="store_true",
                         help="list in the opposite order")
 
 
-def _sorted(rows: list, sort_by, reverse: bool) -> list:
+def _sort_was_asked_for(args) -> bool:
+    """Whether the command line asked for an order other than the default one."""
+    return args.sort_by != DEFAULT_SORT_ORDER or args.reverse
+
+
+def _sorted(rows: list, sort_by: str, reverse: bool) -> list:
     """The rows in the order --sort-by and --reverse asked for."""
-    return channel_directory.sort_rows(
-        rows, sort_by or channel_directory.DEFAULT_SORT, reverse)
+    return channel_directory.sort_rows(rows, SORT_ORDERS[sort_by], reverse)
 
 
 def list_command(argv) -> None:
@@ -736,7 +752,7 @@ def list_command(argv) -> None:
               "       slack-export list --search WORD [WORD ...]\n"
               "       slack-export list --groups [GROUP ...] "
               "[--search WORD [WORD ...]]\n"
-              "       slack-export list ... [--sort-by {export,nickname}] [--reverse]",
+              "       slack-export list ... [--sort-by {name,nickname,export}] [--reverse]",
         # Line breaks written out, since RawDescriptionHelpFormatter keeps them as
         # they are - it is what lets the paragraphs stay separate.
         description="Print every conversation in your conversation index, one per\n"
@@ -759,11 +775,12 @@ def list_command(argv) -> None:
                     "those groups instead; add --search to search within them.\n"
                     "With several names, every conversation in any of them is\n"
                     "listed once, and a GROUPS column says which it is in.\n\n"
-                    "--sort-by export puts the most recently exported first and\n"
-                    "the never exported last. --sort-by nickname sorts by the\n"
-                    "nickname column, those with none last. --reverse turns any\n"
-                    "order back to front, so with --sort-by export the ones never\n"
-                    "exported or exported longest ago come first.\n\n"
+                    "--sort-by chooses the order: name is the default described\n"
+                    "above; nickname sorts by the nickname column, those with\n"
+                    "none last; export puts the most recently exported first and\n"
+                    "the never exported last. --reverse turns any order back to\n"
+                    "front, so with --sort-by export the ones never exported or\n"
+                    "exported longest ago come first.\n\n"
                     "Reads only the conversation index - never the Keychain or "
                     "Slack.",
         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -805,7 +822,7 @@ def list_command(argv) -> None:
 
     store = load_directory()
     if args.groups is not None:
-        if not args.groups and (args.sort_by or args.reverse):
+        if not args.groups and _sort_was_asked_for(args):
             sys.exit(SORT_NEEDS_A_GROUP)
         _list_groups(store, args.groups, term, args.sort_by, args.reverse)
         return
@@ -834,8 +851,8 @@ def _no_such_group(store: dict, name: str) -> str:
     return message
 
 
-def _list_groups(store: dict, names: list, term, sort_by=None,
-                 reverse: bool = False) -> None:
+def _list_groups(store: dict, names: list, term,
+                 sort_by: str = DEFAULT_SORT_ORDER, reverse: bool = False) -> None:
     """`list --groups`: every group with its size, or the members of the named
     groups, searched like `list` if a term is given and in the order asked for."""
     if not names:
@@ -1038,7 +1055,7 @@ def group_command(argv) -> None:
               "       slack-export group name --remove ID [ID ...]\n"
               "       slack-export group name --delete\n"
               "       slack-export group name --list "
-              "[--sort-by {export,nickname}] [--reverse]\n"
+              "[--sort-by {name,nickname,export}] [--reverse]\n"
               "       slack-export group --list",
         # Each paragraph wrapped on its own, so the blank lines between them
         # survive (the default formatter would run them together).
@@ -1089,11 +1106,11 @@ def group_command(argv) -> None:
     args = parser.parse_intermixed_args(argv)
     if args.remove + args.delete + args.list > 1:
         parser.error("use only one of --remove, --delete and --list")
-    if (args.sort_by or args.reverse) and not args.list:
+    if _sort_was_asked_for(args) and not args.list:
         parser.error("--sort-by and --reverse order what --list prints, so they "
                      "need --list")
     if args.name is None:
-        if args.sort_by or args.reverse:
+        if _sort_was_asked_for(args):
             sys.exit(SORT_NEEDS_A_GROUP.replace("list --groups <group>",
                                                 "group <group> --list"))
         if not args.list:

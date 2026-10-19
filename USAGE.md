@@ -301,6 +301,14 @@ The output is sorted by Slack channel name. A conversation without one, such as 
 
 ### Change the order
 
+`--sort-by` takes one of three orders:
+
+| Order | What it sorts by |
+|---|---|
+| `name` | The default, described above: Slack channel name, or nickname for a conversation without one |
+| `nickname` | The nickname column; conversations with nothing in it come last |
+| `export` | When each was last exported, most recent first; never-exported conversations come last |
+
 To see what you exported most recently first, add `--sort-by export`:
 
 ```sh
@@ -341,9 +349,9 @@ C0123456789  -                      project-planning  2 days ago
 
 This sorts by what the column shows, so an export name in `[brackets]` is sorted by its letters along with your own nicknames. Conversations with nothing in the column come last. Add `--reverse` for Z to A, which also moves the ones with nothing in the column to the top.
 
-On its own, `--reverse` gives the normal order from Z to A.
+On its own, `--reverse` gives the default `name` order from Z to A. `--sort-by name` asks for the default order by name; leaving `--sort-by` off does the same.
 
-Both flags also work with a search, with `list --groups <group>`, and with `group <group> --list`. `--sort` is accepted as a shorter spelling of `--sort-by`.
+Both flags also work with a search, with `list --groups <group>`, and with `group <group> --list`.
 
 `list` is completely local. It reads the saved file only and does not contact Slack or read your Slack token, so it also works offline.
 

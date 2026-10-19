@@ -822,25 +822,40 @@ class ListCommandTests(CommandTest):
                          [OTHER_CHAN, "C0000000004", CHAN, "C0000000003",
                           "D0000000005"])
 
-    def test_the_default_order_has_no_word(self):
+    def test_sort_by_name_is_the_default_order(self):
         self.fill_exported()
-        for word in ("name", "slack_name"):
-            with self.subTest(word=word):
-                code, out, _ = self.run_main("list", "--sort-by", word)
-                self.assertEqual((code, out), (2, ""))
+        self.assertEqual(self.ids("list", "--sort-by", "name"), self.ids("list"))
+        self.assertEqual(self.ids("list", "--sort-by", "name", "--reverse"),
+                         self.ids("list")[::-1])
+        self.assertEqual(self.ids("group", "Research", "--list", "--sort-by", "name"),
+                         self.ids("list", "--groups", "Research"))
 
-    def test_other_spellings_of_the_sort_flag(self):
+    def test_the_equals_form_of_the_flag_works(self):
         self.fill_exported()
-        expected = self.ids("list", "--sort-by", "export")
-        self.assertEqual(self.ids("list", "--sort", "export"), expected)
-        self.assertEqual(self.ids("list", "--sort-by", "exported"), expected)
-        self.assertEqual(self.ids("list", "--sort-by=export"), expected)
+        self.assertEqual(self.ids("list", "--sort-by=export"),
+                         self.ids("list", "--sort-by", "export"))
+
+    def test_there_is_one_spelling_of_the_flag_and_of_each_order(self):
+        self.fill_exported()
+        for argv in (("list", "--sort", "export"),
+                     ("list", "--sort=export"),
+                     ("list", "--sort"),
+                     ("group", "Research", "--list", "--sort", "export")):
+            with self.subTest(argv=argv):
+                code, out, err = self.run_main(*argv)
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("there is no --sort; use --sort-by", err)
+        for word in ("exported", "slack_name", "exports", "nick"):
+            with self.subTest(word=word):
+                code, out, err = self.run_main("list", "--sort-by", word)
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("'name', 'nickname', 'export'", err)
 
     def test_an_unknown_sort_order_is_refused(self):
         self.fill_exported()
         code, out, err = self.run_main("list", "--sort-by", "size")
         self.assertEqual((code, out), (2, ""))
-        self.assertIn("'export', 'nickname'", err)
+        self.assertIn("'name', 'nickname', 'export'", err)
 
     def test_sort_applies_to_a_search_and_to_group_views(self):
         self.fill_exported()
@@ -857,6 +872,7 @@ class ListCommandTests(CommandTest):
     def test_sort_flags_are_refused_where_there_is_no_table_to_order(self):
         self.fill_exported()
         for argv in (("list", "--groups", "--sort-by", "export"),
+                     ("list", "--groups", "--sort-by", "nickname"),
                      ("list", "--groups", "--reverse"),
                      ("group", "--list", "--sort-by", "export"),
                      ("group", "Research", "--sort-by", "export"),
