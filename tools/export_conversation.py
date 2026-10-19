@@ -695,8 +695,8 @@ def _quote(word: str) -> str:
 
 # What can be typed after --sort-by, and the order in channel_directory.SORT_KEYS
 # each one asks for. One word per order, with no second spellings.
-SORT_ORDERS = {"name": "slack_name", "nickname": "nickname", "export": "export",
-               "id": "id"}
+SORT_ORDERS = {"name": "slack_name", "id": "id", "nickname": "nickname",
+               "export": "export"}
 DEFAULT_SORT_ORDER = "name"
 
 
@@ -727,17 +727,18 @@ def _add_sort_flags(parser) -> None:
     """--sort-by and --reverse, the same on every command that prints the
     conversation table."""
     parser.add_argument("--sort-by", choices=tuple(SORT_ORDERS),
-                        default=DEFAULT_SORT_ORDER, metavar="{name,nickname,export,id}",
+                        default=DEFAULT_SORT_ORDER, metavar="{name,id,nickname,export}",
                         help="changes conversation list order:\n"
-                             "  name      sorts alphabetically by SLACK NAME\n"
+                             "  name      sorts alphabetically by SLACK NAME "
+                             "(default)\n"
+                             "  id        sorts alphanumerically by ID\n"
                              "  nickname  sorts alphabetically by NICKNAME\n"
-                             "  export    sorts in order of recency by the "
-                             "column LAST EXPORTED\n"
-                             "  id        sorts alphanumerically by ID")
+                             "  export    sorts in order of recency by LAST "
+                             "EXPORTED")
     parser.add_argument("--sort", action=_NoSuchFlag, nargs="?", const="--sort-by",
                         help=argparse.SUPPRESS)
     parser.add_argument("--reverse", action="store_true",
-                        help="list in the opposite order")
+                        help="list conversations in the opposite order")
 
 
 def _sort_was_asked_for(args) -> bool:
@@ -764,7 +765,7 @@ def list_command(argv) -> None:
               "       slack-export list --search WORD [WORD ...]\n"
               "       slack-export list --groups [GROUP ...] "
               "[--search WORD [WORD ...]]\n"
-              "       slack-export list ... [--sort-by {name,nickname,export,id}] [--reverse]",
+              "       slack-export list ... [--sort-by {name,id,nickname,export}] [--reverse]",
         # Line breaks written out, since RawDescriptionHelpFormatter keeps them as
         # they are - it is what lets the paragraphs stay separate.
         description="Print every conversation in your conversation index, one per\n"
@@ -788,13 +789,13 @@ def list_command(argv) -> None:
                     "With several names, every conversation in any of them is\n"
                     "listed once, and a GROUPS column says which it is in.\n\n"
                     "--sort-by changes the order: name (the default, described\n"
-                    "above) sorts alphabetically by SLACK NAME; nickname sorts\n"
-                    "alphabetically by NICKNAME, those with none last; export\n"
-                    "sorts in order of recency by LAST EXPORTED, most recent\n"
-                    "first and the never exported last; id sorts\n"
-                    "alphanumerically by ID. --reverse turns any\n"
-                    "order back to front, so with --sort-by export the ones\n"
-                    "never exported or exported longest ago come first.\n\n"
+                    "above) sorts alphabetically by SLACK NAME; id sorts\n"
+                    "alphanumerically by ID; nickname sorts alphabetically by\n"
+                    "NICKNAME, those with none last; export sorts in order of\n"
+                    "recency by LAST EXPORTED, most recent first and the never\n"
+                    "exported last. --reverse turns any order back to front,\n"
+                    "so with --sort-by export the ones never exported or\n"
+                    "exported longest ago come first.\n\n"
                     "Reads only the conversation index - never the Keychain or "
                     "Slack.",
         formatter_class=_HelpFormatter)
@@ -1069,7 +1070,7 @@ def group_command(argv) -> None:
               "       slack-export group name --remove ID [ID ...]\n"
               "       slack-export group name --delete\n"
               "       slack-export group name --list "
-              "[--sort-by {name,nickname,export,id}] [--reverse]\n"
+              "[--sort-by {name,id,nickname,export}] [--reverse]\n"
               "       slack-export group --list",
         # Each paragraph wrapped on its own, so the blank lines between them
         # survive (the default formatter would run them together).

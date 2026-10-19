@@ -306,9 +306,9 @@ The output is sorted by Slack channel name. A conversation without one, such as 
 | Order | What it sorts by |
 |---|---|
 | `name` | Sorts alphabetically by SLACK NAME. The default, described above: a conversation with no Slack name, such as a DM, is placed by its nickname |
+| `id` | Sorts alphanumerically by ID, so channels (`C…`) come before DMs (`D…`) |
 | `nickname` | Sorts alphabetically by NICKNAME; conversations with nothing in that column come last |
 | `export` | Sorts in order of recency by LAST EXPORTED, most recent first; never-exported conversations come last |
-| `id` | Sorts alphanumerically by ID, so channels (`C…`) come before DMs (`D…`) |
 
 To see what you exported most recently first, add `--sort-by export`:
 
