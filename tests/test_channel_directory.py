@@ -830,6 +830,24 @@ class ListCommandTests(CommandTest):
         self.assertEqual(self.ids("group", "Research", "--list", "--sort-by", "name"),
                          self.ids("list", "--groups", "Research"))
 
+    def test_sort_by_id_is_alphanumeric_by_the_id_column(self):
+        self.fill_exported()
+        everything = self.ids("list")
+        self.assertEqual(self.ids("list", "--sort-by", "id"), sorted(everything))
+        self.assertEqual(self.ids("list", "--sort-by", "id", "--reverse"),
+                         sorted(everything, reverse=True))
+        self.assertEqual(
+            self.ids("group", "Research", "--list", "--sort-by", "id"),
+            sorted(self.ids("list", "--groups", "Research")))
+
+    def test_sort_by_id_breaks_a_tie_by_workspace(self):
+        rows = [{"channel_id": CHAN, "team_id": OTHER_TEAM},
+                {"channel_id": OTHER_CHAN, "team_id": TEAM},
+                {"channel_id": CHAN, "team_id": TEAM}]
+        self.assertEqual([(r["channel_id"], r["team_id"])
+                          for r in cd.sort_rows(rows, "id")],
+                         [(CHAN, TEAM), (CHAN, OTHER_TEAM), (OTHER_CHAN, TEAM)])
+
     def test_the_equals_form_of_the_flag_works(self):
         self.fill_exported()
         self.assertEqual(self.ids("list", "--sort-by=export"),
@@ -849,13 +867,13 @@ class ListCommandTests(CommandTest):
             with self.subTest(word=word):
                 code, out, err = self.run_main("list", "--sort-by", word)
                 self.assertEqual((code, out), (2, ""))
-                self.assertIn("'name', 'nickname', 'export'", err)
+                self.assertIn("'name', 'nickname', 'export', 'id'", err)
 
     def test_an_unknown_sort_order_is_refused(self):
         self.fill_exported()
         code, out, err = self.run_main("list", "--sort-by", "size")
         self.assertEqual((code, out), (2, ""))
-        self.assertIn("'name', 'nickname', 'export'", err)
+        self.assertIn("'name', 'nickname', 'export', 'id'", err)
 
     def test_sort_applies_to_a_search_and_to_group_views(self):
         self.fill_exported()

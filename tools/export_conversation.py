@@ -695,7 +695,8 @@ def _quote(word: str) -> str:
 
 # What can be typed after --sort-by, and the order in channel_directory.SORT_KEYS
 # each one asks for. One word per order, with no second spellings.
-SORT_ORDERS = {"name": "slack_name", "nickname": "nickname", "export": "export"}
+SORT_ORDERS = {"name": "slack_name", "nickname": "nickname", "export": "export",
+               "id": "id"}
 DEFAULT_SORT_ORDER = "name"
 
 
@@ -711,17 +712,28 @@ SORT_NEEDS_A_GROUP = ("FATAL: --sort-by and --reverse order the conversations in
                       "  slack-export list --groups <group> --sort-by export")
 
 
+class _HelpFormatter(argparse.RawDescriptionHelpFormatter):
+    """Keeps the description as written, and also the line breaks in any flag's
+    help that has them, such as --sort-by's table. Help without line breaks is
+    wrapped as usual."""
+
+    def _split_lines(self, text, width):
+        if "\n" in text:
+            return text.splitlines()
+        return super()._split_lines(text, width)
+
+
 def _add_sort_flags(parser) -> None:
     """--sort-by and --reverse, the same on every command that prints the
     conversation table."""
     parser.add_argument("--sort-by", choices=tuple(SORT_ORDERS),
-                        default=DEFAULT_SORT_ORDER, metavar="{name,nickname,export}",
-                        help="the order to list in. name (the default): by "
-                             "Slack channel name, or by nickname for a "
-                             "conversation Slack gives no name. nickname: by "
-                             "the nickname column, those with none last. "
-                             "export: most recently exported first, never "
-                             "exported last")
+                        default=DEFAULT_SORT_ORDER, metavar="{name,nickname,export,id}",
+                        help="changes conversation list order:\n"
+                             "  name      sorts alphabetically by SLACK NAME\n"
+                             "  nickname  sorts alphabetically by NICKNAME\n"
+                             "  export    sorts in order of recency by the "
+                             "column LAST EXPORTED\n"
+                             "  id        sorts alphanumerically by ID")
     parser.add_argument("--sort", action=_NoSuchFlag, nargs="?", const="--sort-by",
                         help=argparse.SUPPRESS)
     parser.add_argument("--reverse", action="store_true",
@@ -752,7 +764,7 @@ def list_command(argv) -> None:
               "       slack-export list --search WORD [WORD ...]\n"
               "       slack-export list --groups [GROUP ...] "
               "[--search WORD [WORD ...]]\n"
-              "       slack-export list ... [--sort-by {name,nickname,export}] [--reverse]",
+              "       slack-export list ... [--sort-by {name,nickname,export,id}] [--reverse]",
         # Line breaks written out, since RawDescriptionHelpFormatter keeps them as
         # they are - it is what lets the paragraphs stay separate.
         description="Print every conversation in your conversation index, one per\n"
@@ -775,15 +787,17 @@ def list_command(argv) -> None:
                     "those groups instead; add --search to search within them.\n"
                     "With several names, every conversation in any of them is\n"
                     "listed once, and a GROUPS column says which it is in.\n\n"
-                    "--sort-by chooses the order: name is the default described\n"
-                    "above; nickname sorts by the nickname column, those with\n"
-                    "none last; export puts the most recently exported first and\n"
-                    "the never exported last. --reverse turns any order back to\n"
-                    "front, so with --sort-by export the ones never exported or\n"
-                    "exported longest ago come first.\n\n"
+                    "--sort-by changes the order: name (the default, described\n"
+                    "above) sorts alphabetically by SLACK NAME; nickname sorts\n"
+                    "alphabetically by NICKNAME, those with none last; export\n"
+                    "sorts in order of recency by LAST EXPORTED, most recent\n"
+                    "first and the never exported last; id sorts\n"
+                    "alphanumerically by ID. --reverse turns any\n"
+                    "order back to front, so with --sort-by export the ones\n"
+                    "never exported or exported longest ago come first.\n\n"
                     "Reads only the conversation index - never the Keychain or "
                     "Slack.",
-        formatter_class=argparse.RawDescriptionHelpFormatter)
+        formatter_class=_HelpFormatter)
     # The nickname column used to be opt-in. It is always shown now, but -n is
     # still accepted, silently, so a habit or a script that types it keeps working.
     parser.add_argument("-n", "--nicknames", action="store_true",
@@ -1055,7 +1069,7 @@ def group_command(argv) -> None:
               "       slack-export group name --remove ID [ID ...]\n"
               "       slack-export group name --delete\n"
               "       slack-export group name --list "
-              "[--sort-by {name,nickname,export}] [--reverse]\n"
+              "[--sort-by {name,nickname,export,id}] [--reverse]\n"
               "       slack-export group --list",
         # Each paragraph wrapped on its own, so the blank lines between them
         # survive (the default formatter would run them together).
@@ -1082,7 +1096,7 @@ def group_command(argv) -> None:
             "`slack-export list`.",
             "Group names are exact: 'Research' and 'research' are two groups. "
             "Put a name with spaces in quotes.")),
-        formatter_class=argparse.RawDescriptionHelpFormatter)
+        formatter_class=_HelpFormatter)
     # Optional only so that `group --list` can list every group; everything
     # else still needs it, checked below.
     parser.add_argument("name", nargs="?",

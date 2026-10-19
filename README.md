@@ -157,7 +157,7 @@ D0123456789  Alex      (DM)              3 weeks ago
 C0123456789  -         project-planning  2 days ago
 ```
 
-The last column shows how long ago you last exported each conversation, so you can see which exports are getting old. To put the most recently exported first, add `--sort-by export`; add `--reverse` as well to put the oldest first. `--sort-by nickname` sorts by your nicknames.
+The last column shows how long ago you last exported each conversation, so you can see which exports are getting old. To put the most recently exported first, add `--sort-by export`; add `--reverse` as well to put the oldest first. `--sort-by nickname` sorts by your nicknames. `--sort-by name`, the default, sorts alphabetically by SLACK NAME, and `--sort-by id` sorts alphanumerically by ID.
 
 You can search your conversation index by name or ID:
 

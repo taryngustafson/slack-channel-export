@@ -600,12 +600,19 @@ def _nickname_sort_key(row: dict) -> tuple:
     return (0 if shown else 1, _words(shown), _name_sort_key(row))
 
 
+def _id_sort_key(row: dict) -> tuple:
+    # Alphanumerically by the ID column, so channels (C...) come before DMs
+    # (D...). The same ID saved for two workspaces falls back to workspace order.
+    return (row["channel_id"], row["team_id"])
+
+
 # The orders `list` can print in. Each is a sort key over one row. Later keys
 # break ties, so the output never depends on the order the store happens to be in.
 SORT_KEYS = {
     "slack_name": _name_sort_key,
     "export": _export_sort_key,
     "nickname": _nickname_sort_key,
+    "id": _id_sort_key,
 }
 DEFAULT_SORT = "slack_name"
 

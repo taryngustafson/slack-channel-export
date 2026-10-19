@@ -301,13 +301,14 @@ The output is sorted by Slack channel name. A conversation without one, such as 
 
 ### Change the order
 
-`--sort-by` takes one of three orders:
+`--sort-by` takes one of four orders, one for each column:
 
 | Order | What it sorts by |
 |---|---|
-| `name` | The default, described above: Slack channel name, or nickname for a conversation without one |
-| `nickname` | The nickname column; conversations with nothing in it come last |
-| `export` | When each was last exported, most recent first; never-exported conversations come last |
+| `name` | Sorts alphabetically by SLACK NAME. The default, described above: a conversation with no Slack name, such as a DM, is placed by its nickname |
+| `nickname` | Sorts alphabetically by NICKNAME; conversations with nothing in that column come last |
+| `export` | Sorts in order of recency by LAST EXPORTED, most recent first; never-exported conversations come last |
+| `id` | Sorts alphanumerically by ID, so channels (`C…`) come before DMs (`D…`) |
 
 To see what you exported most recently first, add `--sort-by export`:
 
@@ -349,7 +350,7 @@ C0123456789  -                      project-planning  2 days ago
 
 This sorts by what the column shows, so an export name in `[brackets]` is sorted by its letters along with your own nicknames. Conversations with nothing in the column come last. Add `--reverse` for Z to A, which also moves the ones with nothing in the column to the top.
 
-On its own, `--reverse` gives the default `name` order from Z to A. `--sort-by name` asks for the default order by name; leaving `--sort-by` off does the same.
+On its own, `--reverse` gives the default `name` order from Z to A. `--sort-by name` asks for the default order by Slack name; leaving `--sort-by` off does the same.
 
 Both flags also work with a search, with `list --groups <group>`, and with `group <group> --list`.
 
