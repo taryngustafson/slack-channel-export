@@ -632,6 +632,8 @@ This is the same table, in the same order, as `slack-export list`, limited to th
 
 `slack-export group Research --list` prints exactly the same thing. Both accept `--sort-by` and `--reverse` (see [Change the order](#change-the-order)). `group --list` takes one group and no search; for several groups at once, or to search within one, use `list --groups`.
 
+If you leave the dashes off and type `slack-export group list` or `slack-export group list Research`, slack-export asks before doing anything. Press Enter to run the `--list` command it shows you, or type `y` if you really do want a group named "list". Anything else cancels. Once a group named "list" exists, `list` means that group and nothing is asked.
+
 A group with nothing in it says so:
 
 ```text

@@ -1636,6 +1636,120 @@ class GroupRemoveDeleteTests(CommandTest):
         self.assertEqual(self.members(), [CHAN, self.DM])
 
 
+class ListWordTests(CommandTest):
+    """list typed after `group` without its dashes: the command asks whether
+    --list was meant. Enter runs it with --list; y, where list is in the name's
+    place, goes ahead as typed. remove and delete are never guessed at."""
+
+    def setUp(self):
+        super().setUp()
+        store = cd.empty()
+        cd.set_slack_name(store, TEAM, "Example", CHAN, "project-planning")
+        cd.set_slack_name(store, TEAM, "Example", OTHER_CHAN, "lab-notes")
+        cd.add_to_group(store, "Research", TEAM, CHAN)
+        cd.add_to_group(store, "Research", TEAM, OTHER_CHAN)
+        ec.save_directory(store, self.path)
+
+    def answer(self, typed, *argv):
+        """Run `group` with `typed` as the answer (None: no terminal)."""
+        self.asked = mock.Mock(return_value=typed)
+        with mock.patch.object(ec, "_ask", self.asked):
+            return self.run_main("group", *argv)
+
+    def groups(self):
+        return json.loads(self.path.read_text())["groups"]
+
+    def test_enter_runs_the_flag_that_was_meant(self):
+        for argv, flag_argv in (
+                (("list",), ("group", "--list")),
+                (("list", "Research"), ("group", "Research", "--list")),
+                (("Research", "list"), ("group", "Research", "--list")),
+                (("list", "Research", "--sort-by", "export"),
+                 ("group", "Research", "--list", "--sort-by", "export"))):
+            with self.subTest(argv=argv):
+                code, out, err = self.answer("", *argv)
+                self.assertEqual(code, 0)
+                self.assertEqual(out, self.run_main(*flag_argv)[1])
+                self.assertIn("It looks like you meant:\n  slack-export "
+                              + " ".join(flag_argv), err)
+        self.assertNotIn("list", self.groups())
+
+    def test_remove_and_delete_typed_as_words_are_never_guessed(self):
+        self.answer("", "list", "Research")       # makes self.asked
+        before = self.path.read_text()
+        for argv in (("delete", "Research"), ("Research", "delete"),
+                     ("remove", "Research", CHAN), ("Research", "remove", CHAN)):
+            with self.subTest(argv=argv):
+                self.asked.reset_mock()
+                code, _, err = self.answer("", *argv)
+                self.asked.assert_not_called()
+                self.assertEqual(code, 1)
+                self.assertIn("is not a conversation ID", err)
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_y_makes_the_group_named_after_the_word(self):
+        code, out, err = self.answer("y", "list")
+        self.assertEqual((code, out), (0, "Created group list (empty).\n"))
+        self.assertIn('There is no group named "list".', err)
+        self.assertIn('Press Enter to run that or type y to make a group named '
+                      '"list"', err)
+        self.assertEqual(self.groups()["list"], [])
+
+    def test_an_existing_group_named_after_the_word_is_not_asked_about(self):
+        self.answer("y", "list")
+        code, out, _ = self.answer("", "list", CHAN)
+        self.asked.assert_not_called()
+        self.assertEqual(code, 0)
+        self.assertEqual([m["channel"] for m in self.groups()["list"]], [CHAN])
+
+    def test_anything_else_cancels_and_changes_nothing(self):
+        before = self.path.read_text()
+        for typed in ("n", "yes", "list", " x "):
+            with self.subTest(typed=typed):
+                code, out, err = self.answer(typed, "list", "Research")
+                self.assertEqual((code, out), (1, ""))
+                self.assertIn("Cancelled. Nothing was changed.", err)
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_no_terminal_changes_nothing(self):
+        before = self.path.read_text()
+        code, out, err = self.answer(None, "list")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("slack-export group --list", err)
+        self.assertIn("there is no one at the terminal", err)
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_y_is_not_offered_when_the_word_is_not_in_the_names_place(self):
+        before = self.path.read_text()
+        code, _, err = self.answer("y", "Research", "list")
+        self.assertEqual(code, 1)
+        self.assertIn('"list" is not a conversation ID.', err)
+        self.assertNotIn("type y", err)
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_with_no_working_list_command_only_y_is_offered(self):
+        before = self.path.read_text()
+        for argv in (("list", CHAN), ("list", "Research", CHAN),
+                     ("list", "--sort-by", "export")):
+            with self.subTest(argv=argv):
+                code, _, err = self.answer("", *argv)
+                self.assertEqual(code, 1)
+                self.assertNotIn("It looks like you meant", err)
+                self.assertIn('Type y to make a group named "list"', err)
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_a_misplaced_word_with_no_flag_version_keeps_the_usual_error(self):
+        code, _, err = self.answer("", "Research", CHAN, "list")
+        self.asked.assert_not_called()
+        self.assertEqual(code, 1)
+        self.assertIn("list is not a conversation ID", err)
+
+    def test_typing_the_flag_itself_never_asks(self):
+        code, _, _ = self.answer("", "--list")
+        self.asked.assert_not_called()
+        self.assertEqual(code, 0)
+
+
 class SaveCommandTests(CommandTest):
 
     CONVERSATIONS = {

@@ -1051,6 +1051,95 @@ def _remove_from_group(store: dict, name: str, raw_ids: list) -> None:
     print("\n\n".join("\n".join(section) for section in sections))
 
 
+def _list_word_slip(parser, argv, args):
+    """Whether `group` was typed with list as a plain word - `group list`,
+    `group list Research`, `group Research list` - which is almost always --list
+    with its dashes left off. Only list is caught: --list changes nothing, while
+    --remove and --delete are never run on a guess.
+
+    Returns None when list was not typed as a word, when a flag was typed as
+    well, or when a group named list already exists (then it means that group).
+    Otherwise (as_name, meant, shown): as_name says list is in the group name's
+    place, so it could be a new group's name; meant is the argument list with
+    the dashes added and shown is how to print it, both None when adding them
+    still makes no working command.
+    """
+    if args.remove or args.delete or args.list:
+        return None
+    if "list" not in [args.name, *args.conversations]:
+        return None
+    as_name = args.name == "list"
+    if as_name and "list" in load_directory().get("groups", {}):
+        return None
+
+    meant = list(argv)
+    meant[meant.index("list")] = "--list"
+    m = parser.parse_intermixed_args(meant)
+    has_name = m.name is not None and not parse_conversation_id(m.name)
+    works = not m.conversations and (
+        has_name or (m.name is None and not _sort_was_asked_for(m)))
+    if not works:
+        # With nothing to suggest, a misplaced word is left to the usual
+        # "not a conversation ID" refusal.
+        return (True, None, None) if as_name else None
+    shown = " ".join(["slack-export", "group"]
+                     + ([_quote(m.name)] if m.name is not None else [])
+                     + ["--list"]
+                     + (["--sort-by", m.sort_by]
+                        if m.sort_by != DEFAULT_SORT_ORDER else [])
+                     + (["--reverse"] if m.reverse else []))
+    return as_name, meant, shown
+
+
+def _ask() -> "str | None":
+    """One line typed at the terminal, or None when nobody is there to type it
+    (input from a pipe or a script), or when it is cut off with Ctrl-C or Ctrl-D."""
+    if not sys.stdin.isatty():
+        return None
+    try:
+        return input("> ")
+    except (EOFError, KeyboardInterrupt):
+        print(file=sys.stderr)
+        return None
+
+
+def _confirm_list_word(as_name, meant, shown):
+    """Ask whether list typed as a plain word was meant as --list. Returns the
+    argument list to run instead, or None to go ahead as typed; exits, changing
+    nothing, when the answer is anything else or there is nobody to answer.
+
+    Enter runs the command with --list; y goes ahead as typed, making (or adding
+    to) a group named list - offered only when list is in the name's place."""
+    if as_name:
+        lines = ['There is no group named "list".']
+    else:
+        lines = ['"list" is not a conversation ID.']
+    if meant is not None:
+        lines += ["It looks like you meant:", f"  {shown}"]
+    else:
+        lines.append("Did you mean --list? Lists go:  slack-export group --list  "
+                     "or  slack-export group <name> --list")
+    choices = []
+    if meant is not None:
+        choices.append("press Enter to run that")
+    if as_name:
+        choices.append('type y to make a group named "list"')
+    choice = " or ".join(choices)
+    lines.append(choice[0].upper() + choice[1:] + "; anything else cancels.")
+    print("\n".join(lines), file=sys.stderr)
+
+    answer = _ask()
+    if answer is None:
+        sys.exit("Nothing was changed: there is no one at the terminal to "
+                 "answer.")
+    answer = answer.strip().lower()
+    if answer == "" and meant is not None:
+        return meant
+    if answer == "y" and as_name:
+        return None
+    sys.exit("Cancelled. Nothing was changed.")
+
+
 def group_command(argv) -> None:
     """`slack-export group NAME [ID ...]`: make a group, or add conversations to
     one. `--remove ID ...` takes conversations out of it; `--delete` deletes it;
@@ -1119,6 +1208,12 @@ def group_command(argv) -> None:
     # this supports: plain parse_args on 3.9 takes the IDs' slot as filled (empty)
     # before it reaches --remove, and then rejects the IDs.
     args = parser.parse_intermixed_args(argv)
+    slip = _list_word_slip(parser, argv, args)
+    if slip:
+        meant = _confirm_list_word(*slip)
+        if meant is not None:
+            group_command(meant)
+            return
     if args.remove + args.delete + args.list > 1:
         parser.error("use only one of --remove, --delete and --list")
     if _sort_was_asked_for(args) and not args.list:
