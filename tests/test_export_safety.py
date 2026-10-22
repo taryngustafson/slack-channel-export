@@ -248,15 +248,49 @@ class ExporterOrderTests(TempDirTest):
     can ever get as far as Slack."""
 
     def run_exporter(self, *args):
+        return self.run_typed("C0123456789", "safety-test-not-real", *args)
+
+    def run_typed(self, *argv):
+        """The exporter with exactly these words after it."""
         bin_dir = self.tmp / "bin"
         bin_dir.mkdir()
         self.marker = self.tmp / "keychain-was-read"
         fake_bin(bin_dir, "security", f'touch "{self.marker}"\nexit 1\n')
         env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
         return subprocess.run(
-            [sys.executable, str(TOOLS / "export_conversation.py"), "C0123456789",
-             "safety-test-not-real", *args],
+            [sys.executable, str(TOOLS / "export_conversation.py"), *argv],
             capture_output=True, text=True, env=env)
+
+    def test_several_conversations_get_past_the_checks(self):
+        result = self.run_typed("C0123456789", "D0123456789",
+                                "--out", str(self.tmp / "out"))
+        self.assertIn("no Keychain entry", result.stderr)
+        self.assertTrue(self.marker.exists())
+
+    def test_ids_mixed_with_a_name_are_refused_before_anything_happens(self):
+        result = self.run_typed("C0123456789", "D0123456789", "Notes")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("some of the words after C0123456789", result.stderr)
+        self.assertFalse(self.marker.exists(), "the Keychain must not be read")
+
+    def test_copy_with_several_is_refused_before_anything_happens(self):
+        result = self.run_typed("C0123456789", "D0123456789", "--copy")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--copy works with one conversation", result.stderr)
+        self.assertFalse(self.marker.exists(), "the Keychain must not be read")
+
+    def test_every_conversation_is_checked_before_slack_is_contacted(self):
+        # Only the SECOND conversation's --out file would be committable, so a
+        # refusal here proves it was checked before the first was fetched.
+        repo = self.tmp / "repo"
+        repo.mkdir()
+        git(repo, "init", "-q")
+        (repo / ".gitignore").write_text("C0123456789.*\n")
+        result = self.run_typed("C0123456789", "D0123456789", "--out", str(repo))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("D0123456789", result.stderr)
+        self.assertNotIn("C0123456789.md", result.stderr)
+        self.assertFalse(self.marker.exists(), "the Keychain must not be read")
 
     def test_out_inside_a_repository_is_refused_before_anything_happens(self):
         repo = self.tmp / "repo"
@@ -562,6 +596,112 @@ class ConversationIdTests(unittest.TestCase):
                      "multimodal-object-detection", "", "   ", None):
             with self.subTest(text=text):
                 self.assertIsNone(ec.parse_conversation_id(text))
+
+
+class SeveralConversationsTests(TempDirTest):
+    """One conversation that Slack refuses must not stop the others, whichever
+    order they were typed in. Slack is stubbed out entirely: export_one stands in
+    for the fetch, so these check the loop around it."""
+
+    def run_main(self, *ids, refuse=()):
+        exported = []
+
+        def fake_export_one(client, job, *rest):
+            if job["conversation_id"] in refuse:
+                raise ec.ExportFailed("conversations.info failed: channel_not_found")
+            exported.append(job["conversation_id"])
+
+        argv = ["slack-export", *ids, "--out", str(self.tmp / "out")]
+        out = io.StringIO()
+        with mock.patch.object(sys, "argv", argv), \
+                mock.patch.object(ec, "RAW_DIR", self.tmp / "raw"), \
+                mock.patch.object(ec, "connect"), \
+                mock.patch.object(ec, "assert_read_only",
+                                  return_value=([], {"url": "https://example/"})), \
+                mock.patch.object(ec, "export_one", side_effect=fake_export_one), \
+                redirect_stdout(out):
+            try:
+                ec.main()
+                code = 0
+            except SystemExit as exc:
+                code = exc.code
+        return exported, out.getvalue(), code
+
+    def test_a_refused_conversation_is_skipped_whichever_position_it_is_in(self):
+        for ids in (("C0123456789", "D0123456789"), ("D0123456789", "C0123456789")):
+            with self.subTest(order=ids):
+                exported, output, code = self.run_main(*ids, refuse={"C0123456789"})
+                self.assertEqual(exported, ["D0123456789"])
+                self.assertIn("DONE: 1 of 2 exported", output)
+                self.assertIn("C0123456789  FAILED: conversations.info failed: "
+                              "channel_not_found", output)
+                self.assertEqual(code, 1, "a partial run is still an error")
+
+    def test_all_exported_is_a_clean_exit(self):
+        exported, output, code = self.run_main("C0123456789", "D0123456789")
+        self.assertEqual(exported, ["C0123456789", "D0123456789"])
+        self.assertIn("DONE: 2 of 2 exported", output)
+        self.assertEqual(code, 0)
+
+    def test_one_conversation_alone_still_fails_as_before(self):
+        exported, output, code = self.run_main("C0123456789", refuse={"C0123456789"})
+        self.assertEqual(code, "FATAL: conversations.info failed: channel_not_found")
+        self.assertNotIn("DONE", output)
+
+    def test_export_one_raises_instead_of_exiting_and_writes_nothing(self):
+        from slack_sdk.errors import SlackApiError
+        client = mock.Mock()
+        client.conversations_info.side_effect = SlackApiError(
+            "failed", {"ok": False, "error": "channel_not_found"})
+        job = {"conversation_id": "C0123456789", "stem": "C0123456789",
+               "archive": None, "raw_path": self.tmp / "raw" / "C0123456789.raw.json",
+               "md_path": self.tmp / "C0123456789.md",
+               "txt_path": self.tmp / "C0123456789.txt", "typed": ""}
+        with redirect_stdout(io.StringIO()), \
+                self.assertRaises(ec.ExportFailed) as caught:
+            ec.export_one(client, job, mock.Mock(), [], {"url": "x"}, 1, 2)
+        self.assertIn("channel_not_found", str(caught.exception))
+        self.assertEqual(list(self.tmp.iterdir()), [])
+
+
+class SplitTargetsTests(unittest.TestCase):
+    """The words after the first ID: more conversations, or the file name."""
+
+    def test_one_id_alone(self):
+        self.assertEqual(ec.split_targets("C0123456789", []), (["C0123456789"], []))
+
+    def test_words_that_are_not_ids_are_the_name(self):
+        self.assertEqual(ec.split_targets("C0123456789", ["Project", "Planning"]),
+                         (["C0123456789"], ["Project", "Planning"]))
+
+    def test_ids_after_the_first_are_more_conversations(self):
+        self.assertEqual(
+            ec.split_targets("C0123456789", ["D0123456789", "G0123456789"]),
+            (["C0123456789", "D0123456789", "G0123456789"], []))
+
+    def test_links_count_as_ids(self):
+        link = "https://example.slack.com/archives/D0123456789/p1787000000000100"
+        self.assertEqual(ec.split_targets("C0123456789", [link]),
+                         (["C0123456789", "D0123456789"], []))
+
+    def test_a_repeat_is_exported_once_where_first_typed(self):
+        self.assertEqual(
+            ec.split_targets("C0123456789",
+                             ["D0123456789", "<#C0123456789|general>"]),
+            (["C0123456789", "D0123456789"], []))
+
+    def test_ids_mixed_with_other_words_are_refused(self):
+        for rest in (["D0123456789", "Notes"], ["Notes", "D0123456789"]):
+            with self.subTest(rest=rest), \
+                    self.assertRaises(SystemExit) as caught:
+                ec.split_targets("C0123456789", rest)
+            self.assertIn("Notes", str(caught.exception.code))
+            self.assertIn("D0123456789", str(caught.exception.code))
+
+    def test_the_first_word_must_still_be_an_id(self):
+        with self.assertRaises(SystemExit) as caught:
+            ec.split_targets("Planning", ["C0123456789"])
+        self.assertIn("is not a Slack conversation ID", str(caught.exception.code))
 
 
 # ── install.sh ───────────────────────────────────────────────────────────────

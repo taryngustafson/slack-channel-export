@@ -121,6 +121,30 @@ slack-export C0123456789 "Project Planning"
 
 If you do not provide a name, the conversation ID becomes the filename.
 
+## Export several conversations at once
+
+Type more than one conversation ID, and each is exported in turn:
+
+```sh
+slack-export C0123456789 D0123456789
+```
+
+Each conversation gets its own files, named by its ID. slack-export treats the words after the first ID as more conversations only when every one of them is an ID or a Slack link. Otherwise they are a file name, as above. A mix of the two is refused, because one name cannot go on several sets of files:
+
+```text
+FATAL: some of the words after C0123456789 are conversation IDs and some are not.
+```
+
+If Slack refuses one of them (a mistyped ID, or a channel you are not in), that one is skipped and the rest are still exported, whatever order you typed them in. The summary at the end says which failed and why:
+
+```text
+ DONE: 1 of 2 exported
+  C0123456789  exports/C0123456789.md
+  D0123456789  FAILED: conversations.info failed: channel_not_found
+```
+
+`--out` and `--no-threads` apply to all of them. `--copy` works with one conversation at a time.
+
 ## Where the files go
 
 By default, the readable files are saved in:
