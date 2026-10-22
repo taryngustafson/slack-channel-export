@@ -1716,7 +1716,7 @@ def main() -> None:
         other = owner.setdefault(job["stem"], job["conversation_id"])
         if other != job["conversation_id"]:
             sys.exit(f"FATAL: {other} and {job['conversation_id']} would both be "
-                     f"saved as {job['stem']}.\n"
+                     f"saved under the file name \"{job['stem']}\".\n"
                      f"       Give each conversation its own name.")
 
     # Before any folder is created, the Keychain is read, or Slack is contacted:
