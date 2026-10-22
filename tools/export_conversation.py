@@ -23,6 +23,7 @@ conversations named on the command line - it never enumerates the workspace.
     slack-export C0123456789
     slack-export C0123456789 Project Planning   # name the output file
     slack-export C0123456789 D0123456789        # several, one after another
+    slack-export C0123456789 Planning D0123456789 Alice   # ...each with a name
     slack-export D0123456789 --copy                # also copy the Markdown
     slack-export C0123456789 --out ~/Desktop        # put the .md and .txt there
     slack-export C0123456789                        # again later: append what is new
@@ -695,37 +696,40 @@ def require_conversation_id(raw) -> str:
     return conversation_id
 
 
-def split_targets(first: str, rest: list):
-    """The conversations to export, and the words naming the files, from what was
-    typed after slack-export.
+def split_targets(first: str, rest: list) -> list:
+    """The conversations to export, each with the name typed for its files, as
+    (conversation ID, name) pairs in the order typed.
 
-    The words after the first ID are either more conversations - when every one of
-    them is a conversation ID or a link to one - or the file name, as before:
+    The words after an ID, up to the next ID, are that conversation's file name;
+    an ID with no words after it gets "" and so keeps its ID as the name:
 
-        slack-export C0123456789 D0123456789     # two conversations
-        slack-export C0123456789 Project Planning   # one, named
+        slack-export C0123456789 Project Planning          # one, named
+        slack-export C0123456789 Planning D0123456789      # two, the first named
 
-    A mix is refused rather than guessed at: one name cannot go on several sets of
-    files, and an ID inside a name is more likely a slip than a wish. A
-    conversation typed twice is exported once, where it was first typed.
+    A word counts as an ID if parse_conversation_id finds one in it, so a name that
+    looks like an ID starts a new conversation instead - rare enough to accept.
+    The same conversation typed twice under the same name is exported once; under
+    two different names it is refused, as more likely a slip than a wish.
     """
-    conversation_id = require_conversation_id(first)
-    found = [parse_conversation_id(word) for word in rest]
-    if not any(found):
-        return [conversation_id], list(rest)
-    if not all(found):
-        ids = [word for word, got in zip(rest, found) if got]
-        others = [word for word, got in zip(rest, found) if not got]
-        sys.exit(
-            f"FATAL: some of the words after {conversation_id} are conversation "
-            f"IDs and some are not.\n"
-            f"       IDs     : {' '.join(_quote(word) for word in ids)}\n"
-            f"       not IDs : {' '.join(_quote(word) for word in others)}\n"
-            f"       To export several conversations, type only IDs. A file name "
-            f"works\n"
-            f"       with one conversation at a time.")
-    # dict.fromkeys drops the repeats and keeps the order they were typed in.
-    return list(dict.fromkeys([conversation_id, *found])), []
+    targets = [(require_conversation_id(first), [])]
+    for word in rest:
+        found = parse_conversation_id(word)
+        if found:
+            targets.append((found, []))
+        else:
+            targets[-1][1].append(word)
+
+    named = {}
+    for conversation_id, words in targets:
+        typed = " ".join(words)
+        earlier = named.setdefault(conversation_id, typed)
+        if earlier != typed:
+            sys.exit(
+                f"FATAL: {conversation_id} is typed twice, as "
+                f"{_quote(earlier) or '(no name)'} and {_quote(typed) or '(no name)'}.\n"
+                f"       Type it once, with the name you want for its files.")
+    # A dict keeps the order its keys were first added, so this is the order typed.
+    return list(named.items())
 
 
 def _quote(word: str) -> str:
@@ -1639,8 +1643,8 @@ def main() -> None:
         # first; the flags are optional and can go in any order after it.
         usage="slack-export conversation_id [name ...] "
               "[--out DIR] [--no-threads] [--copy]\n"
-              "       slack-export conversation_id conversation_id ... "
-              "[--out DIR] [--no-threads]\n"
+              "       slack-export conversation_id [name ...] "
+              "conversation_id [name ...] ... [--out DIR] [--no-threads]\n"
               "       slack-export save conversation_id [nickname ...]\n"
               "       slack-export list [search ...]\n"
               "       slack-export list --groups [group ...] [--search word ...]\n"
@@ -1658,11 +1662,11 @@ def main() -> None:
     # Optional, and the LAST positional: every leftover word is joined into the file
     # name, so quotes are welcome but not required -
     #   slack-export C0123456789 Project Planning
-    # - unless every one of them is a conversation ID; see split_targets.
+    # - up to the next conversation ID, which starts another export; see
+    # split_targets.
     parser.add_argument("name", nargs="*",
-                        help="what to call the exported files "
-                             "(default: the conversation ID), or more "
-                             "conversation IDs to export one after another")
+                        help="what to call the files of the ID before it "
+                             "(default: that ID)")
     parser.add_argument("--no-threads", action="store_true",
                         help="top-level messages only, skipping thread replies "
                              "(much faster, but most of a busy channel is in "
@@ -1686,8 +1690,8 @@ def main() -> None:
     incremental._self_test()
 
     # Before anything else: is each of those actually a conversation ID?
-    conversation_ids, name = split_targets(args.conversation_id, args.name)
-    if args.copy and len(conversation_ids) > 1:
+    targets = split_targets(args.conversation_id, args.name)
+    if args.copy and len(targets) > 1:
         sys.exit("FATAL: --copy works with one conversation at a time.\n"
                  "       Leave it off to export several, or export the one you "
                  "want copied by itself.")
@@ -1697,12 +1701,23 @@ def main() -> None:
     # The stem carries no timestamp, so a re-run under the same name lands on the
     # same three files and tops them up rather than making a fourth copy.
     jobs = []
-    for conversation_id in conversation_ids:
-        stem = safe_stem(" ".join(name)) or conversation_id
-        jobs.append({"conversation_id": conversation_id, "typed": " ".join(name),
+    for conversation_id, typed in targets:
+        stem = safe_stem(typed) or conversation_id
+        jobs.append({"conversation_id": conversation_id, "typed": typed,
                      "stem": stem, "raw_path": RAW_DIR / f"{stem}.raw.json",
                      "md_path": out_dir / f"{stem}.md",
                      "txt_path": out_dir / f"{stem}.txt"})
+
+    # Two conversations under one name would share one set of files: the second
+    # would overwrite the first's archive and be refused by its transcripts. Names
+    # that differ only in punctuation ("A&B", "A B") meet here too, as A-B.
+    owner = {}
+    for job in jobs:
+        other = owner.setdefault(job["stem"], job["conversation_id"])
+        if other != job["conversation_id"]:
+            sys.exit(f"FATAL: {other} and {job['conversation_id']} would both be "
+                     f"saved as {job['stem']}.\n"
+                     f"       Give each conversation its own name.")
 
     # Before any folder is created, the Keychain is read, or Slack is contacted:
     # a private conversation is never written where git could commit it. Every

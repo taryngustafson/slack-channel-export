@@ -129,11 +129,13 @@ Type more than one conversation ID, and each is exported in turn:
 slack-export C0123456789 D0123456789
 ```
 
-Each conversation gets its own files, named by its ID. slack-export treats the words after the first ID as more conversations only when every one of them is an ID or a Slack link. Otherwise they are a file name, as above. A mix of the two is refused, because one name cannot go on several sets of files:
+To name the files, put each name after its ID. The words after an ID, up to the next ID, are that conversation's file name. An ID with nothing after it keeps its ID as the name:
 
-```text
-FATAL: some of the words after C0123456789 are conversation IDs and some are not.
+```sh
+slack-export C0123456789 Project Planning D0123456789 Alice G0123456789
 ```
+
+This saves `Project-Planning`, `Alice` and `G0123456789`. Any word that is a conversation ID or a Slack link starts the next conversation, so a name cannot contain one. Two conversations cannot share a name, because they would share files. That is refused before anything is exported.
 
 If Slack refuses one of them (a mistyped ID, or a channel you are not in), that one is skipped and the rest are still exported, whatever order you typed them in. The summary at the end says which failed and why:
 

@@ -267,11 +267,16 @@ class ExporterOrderTests(TempDirTest):
         self.assertIn("no Keychain entry", result.stderr)
         self.assertTrue(self.marker.exists())
 
-    def test_ids_mixed_with_a_name_are_refused_before_anything_happens(self):
-        result = self.run_typed("C0123456789", "D0123456789", "Notes")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("some of the words after C0123456789", result.stderr)
-        self.assertFalse(self.marker.exists(), "the Keychain must not be read")
+    def test_two_conversations_under_one_name_are_refused_before_anything_happens(self):
+        for argv in (("C0123456789", "Notes", "D0123456789", "Notes"),
+                     ("C0123456789", "A&B", "D0123456789", "A B")):
+            with self.subTest(argv=argv):
+                result = self.run_typed(*argv)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("C0123456789 and D0123456789 would both be saved",
+                              result.stderr)
+                self.assertFalse(self.marker.exists(), "the Keychain must not be read")
+                shutil.rmtree(self.tmp / "bin")
 
     def test_copy_with_several_is_refused_before_anything_happens(self):
         result = self.run_typed("C0123456789", "D0123456789", "--copy")
@@ -637,6 +642,25 @@ class SeveralConversationsTests(TempDirTest):
                               "channel_not_found", output)
                 self.assertEqual(code, 1, "a partial run is still an error")
 
+    def test_each_conversation_gets_the_name_typed_after_it(self):
+        stems = {}
+
+        def record(client, job, *rest):
+            stems[job["conversation_id"]] = job["stem"]
+
+        argv = ["slack-export", "C0123456789", "Project", "Planning", "D0123456789",
+                "--out", str(self.tmp / "out")]
+        with mock.patch.object(sys, "argv", argv), \
+                mock.patch.object(ec, "RAW_DIR", self.tmp / "raw"), \
+                mock.patch.object(ec, "connect"), \
+                mock.patch.object(ec, "assert_read_only",
+                                  return_value=([], {"url": "https://example/"})), \
+                mock.patch.object(ec, "export_one", side_effect=record), \
+                redirect_stdout(io.StringIO()):
+            ec.main()
+        self.assertEqual(stems, {"C0123456789": "Project-Planning",
+                                 "D0123456789": "D0123456789"})
+
     def test_all_exported_is_a_clean_exit(self):
         exported, output, code = self.run_main("C0123456789", "D0123456789")
         self.assertEqual(exported, ["C0123456789", "D0123456789"])
@@ -665,38 +689,48 @@ class SeveralConversationsTests(TempDirTest):
 
 
 class SplitTargetsTests(unittest.TestCase):
-    """The words after the first ID: more conversations, or the file name."""
+    """The words after an ID, up to the next ID, are that conversation's name."""
 
     def test_one_id_alone(self):
-        self.assertEqual(ec.split_targets("C0123456789", []), (["C0123456789"], []))
+        self.assertEqual(ec.split_targets("C0123456789", []), [("C0123456789", "")])
 
     def test_words_that_are_not_ids_are_the_name(self):
         self.assertEqual(ec.split_targets("C0123456789", ["Project", "Planning"]),
-                         (["C0123456789"], ["Project", "Planning"]))
+                         [("C0123456789", "Project Planning")])
 
     def test_ids_after_the_first_are_more_conversations(self):
         self.assertEqual(
             ec.split_targets("C0123456789", ["D0123456789", "G0123456789"]),
-            (["C0123456789", "D0123456789", "G0123456789"], []))
+            [("C0123456789", ""), ("D0123456789", ""), ("G0123456789", "")])
+
+    def test_each_name_goes_with_the_id_before_it(self):
+        self.assertEqual(
+            ec.split_targets("D0123456789",
+                             ["Alice", "D0123456780", "Bob", "Smith", "C0123456789"]),
+            [("D0123456789", "Alice"), ("D0123456780", "Bob Smith"),
+             ("C0123456789", "")])
 
     def test_links_count_as_ids(self):
         link = "https://example.slack.com/archives/D0123456789/p1787000000000100"
-        self.assertEqual(ec.split_targets("C0123456789", [link]),
-                         (["C0123456789", "D0123456789"], []))
+        self.assertEqual(ec.split_targets("C0123456789", ["Planning", link]),
+                         [("C0123456789", "Planning"), ("D0123456789", "")])
 
-    def test_a_repeat_is_exported_once_where_first_typed(self):
+    def test_a_repeat_under_the_same_name_is_exported_once_where_first_typed(self):
         self.assertEqual(
             ec.split_targets("C0123456789",
                              ["D0123456789", "<#C0123456789|general>"]),
-            (["C0123456789", "D0123456789"], []))
+            [("C0123456789", ""), ("D0123456789", "")])
+        self.assertEqual(
+            ec.split_targets("C0123456789", ["Notes", "C0123456789", "Notes"]),
+            [("C0123456789", "Notes")])
 
-    def test_ids_mixed_with_other_words_are_refused(self):
-        for rest in (["D0123456789", "Notes"], ["Notes", "D0123456789"]):
+    def test_a_repeat_under_another_name_is_refused(self):
+        for rest in (["Alice", "C0123456789", "Bob"], ["C0123456789", "Bob"]):
             with self.subTest(rest=rest), \
                     self.assertRaises(SystemExit) as caught:
                 ec.split_targets("C0123456789", rest)
-            self.assertIn("Notes", str(caught.exception.code))
-            self.assertIn("D0123456789", str(caught.exception.code))
+            self.assertIn("C0123456789 is typed twice", str(caught.exception.code))
+            self.assertIn("Bob", str(caught.exception.code))
 
     def test_the_first_word_must_still_be_an_id(self):
         with self.assertRaises(SystemExit) as caught:
