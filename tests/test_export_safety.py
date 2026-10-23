@@ -451,7 +451,7 @@ class PermissionTests(TempDirTest):
         # created is left. It must already be owner-only: anyone who opened the
         # file during a readable window would keep that access after a later chmod.
         path = self.tmp / "Foo.md"
-        with mock.patch.object(ec.os, "chmod"):
+        with mock.patch.object(ec.os, "chmod"), mock.patch.object(ec.os, "fchmod"):
             ec.write_atomic(path, "hello\n")
         self.assertEqual(mode(path), 0o600)
 
@@ -463,14 +463,17 @@ class PermissionTests(TempDirTest):
         self.assertEqual(path.read_text(), "new\n")
         self.assertEqual(mode(path), 0o600)
 
-    def test_stale_partial_file_is_tightened_and_consumed(self):
+    def test_a_stale_partial_file_is_refused_and_left_alone(self):
+        # It might be a crash's leftover, or something else entirely: never
+        # truncated, reused or deleted, and nothing is written past it.
         path = self.tmp / "Foo.raw.json"
         stale = self.tmp / "Foo.raw.json.partial"
         stale.write_text("half-written by an interrupted run")
-        stale.chmod(0o644)
-        ec.write_atomic(path, "{}")
-        self.assertEqual(mode(path), 0o600)
-        self.assertFalse(stale.exists())
+        with self.assertRaises(FileExistsError) as caught:
+            ec.write_atomic(path, "{}")
+        self.assertIn("Foo.raw.json.partial is in the way", str(caught.exception))
+        self.assertEqual(stale.read_text(), "half-written by an interrupted run")
+        self.assertFalse(path.exists())
 
     def test_write_is_still_atomic(self):
         path = self.tmp / "Foo.md"
@@ -782,6 +785,8 @@ class InstallScriptTests(TempDirTest):
         self.assertIn("PYTHON-RAN", ran.stdout)
         self.assertIn("export_conversation.py C0123456789", ran.stdout)
 
+    # zsh is the macOS default shell; elsewhere it may simply not be installed.
+    @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
     def test_works_when_run_with_zsh_and_from_another_folder(self):
         result = self.install("--to", str(self.bin_dir), shell="zsh")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

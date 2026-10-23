@@ -10,13 +10,28 @@ Three things can have changed since an earlier export:
   1. new top-level messages           - ts newer than the cutoff
   2. new replies on a known thread    - latest_reply moved past the cutoff
   3. a FIRST reply on an old message  - it had no thread at all last time
+  4. a thread never fetched at all    - the earlier run used --no-threads
 
 The third is the one that is easy to miss. Polling every thread that was already
 known would never find it, because the message was not a thread when it was
 archived. Comparing Slack's own reply_count and latest_reply against the archive
 catches all three, and costs one cheap pass over the top-level history instead of
 one API call per thread.
+
+The fourth is told apart by the archive itself: a parent whose replies were ever
+fetched carries a `thread_replies` list, even an empty one, and a parent that was
+only ever seen in the top-level history does not. So no flag about how earlier
+runs were made has to be trusted, and old archives work unchanged.
+
+Replies that turn up on a later run but are OLDER than what the readable files
+already cover - the backfilled threads above - cannot be found by timestamp
+alone, so merge() stamps them with the run that added them (BACKFILL_RUN) and
+parts_since() includes them for any file rendered before that run.
 """
+
+# Set on a reply added to the archive after the files had already moved past its
+# timestamp: the number of the run that added it. See parts_since().
+BACKFILL_RUN = "_backfill_run"
 
 # A Slack ts is a decimal string, "1787000000.123456" - epoch seconds plus a
 # per-channel counter. Comparing them as STRINGS almost works and then silently
@@ -75,14 +90,16 @@ def classify(archived: list, fresh: list, cutoff: str) -> dict:
                 moved_threads.append(ts)
             continue
 
-        # Known message. It only needs a replies call if Slack says the thread
-        # has grown - either the count changed, or the newest reply is past the
-        # cutoff. Checking both means a reply added AND one deleted, which leaves
+        # Known message. It needs a replies call if its thread was never fetched
+        # (an earlier --no-threads run), or if Slack says the thread has grown -
+        # either the count changed, or the newest reply is past the cutoff.
+        # Checking both means a reply added AND one deleted, which leaves
         # reply_count unchanged, is still caught by latest_reply.
         before = known[ts]
+        never_fetched = bool(message.get("reply_count")) and "thread_replies" not in before
         grew = message.get("reply_count", 0) != before.get("reply_count", 0)
         recent = ts_value(message.get("latest_reply")) > cutoff_value
-        if grew or recent:
+        if never_fetched or grew or recent:
             moved_threads.append(ts)
 
     return {
@@ -92,7 +109,8 @@ def classify(archived: list, fresh: list, cutoff: str) -> dict:
     }
 
 
-def merge(archived: list, new_top: list, replies_by_parent: dict) -> dict:
+def merge(archived: list, new_top: list, replies_by_parent: dict,
+          cutoff: str = None, run: int = None) -> dict:
     """Fold new messages and replies into the archived list, in place.
 
     The archive is the record of what was actually said, so an existing message is
@@ -102,9 +120,15 @@ def merge(archived: list, new_top: list, replies_by_parent: dict) -> dict:
     purely a counter - reply_count and friends - is refreshed, so the next run can
     tell whether the thread moved again.
 
+    A parent whose replies were fetched always ends up with a `thread_replies`
+    list, empty or not, which is what marks its thread as fetched (see classify).
+    A reply no newer than `cutoff` - what the archive already covered - is stamped
+    with `run`, so the readable files can still be given it (see parts_since).
+
     Returns counts for the summary.
     """
     known = index_by_ts(archived)
+    cutoff_value = ts_value(cutoff)
     added_replies, updated_threads = [], []
 
     for message in new_top:
@@ -117,10 +141,15 @@ def merge(archived: list, new_top: list, replies_by_parent: dict) -> dict:
         if parent is None:
             continue
 
-        seen = {r["ts"] for r in parent.get("thread_replies", [])}
+        held = parent.setdefault("thread_replies", [])
+        seen = {r["ts"] for r in held}
         fresh_replies = [r for r in replies if r.get("ts") not in seen]
         if fresh_replies:
-            parent.setdefault("thread_replies", []).extend(fresh_replies)
+            if cutoff is not None and run is not None:
+                for reply in fresh_replies:
+                    if ts_value(reply.get("ts")) <= cutoff_value:
+                        reply[BACKFILL_RUN] = run
+            held.extend(fresh_replies)
             parent["thread_replies"].sort(key=lambda m: ts_value(m.get("ts")))
             added_replies += fresh_replies
             updated_threads.append(parent_ts)
@@ -141,7 +170,7 @@ def merge(archived: list, new_top: list, replies_by_parent: dict) -> dict:
     }
 
 
-def parts_since(messages: list, since: str) -> dict:
+def parts_since(messages: list, since: str, rendered_run: int = 0) -> dict:
     """Everything in a merged archive newer than `since`, in the two render shapes.
 
     Driven off the archive rather than off what this run happened to fetch, which
@@ -153,6 +182,9 @@ def parts_since(messages: list, since: str) -> dict:
     beneath them, as in a normal export. A reply on an OLDER parent cannot go
     there - chronologically it belongs hundreds of lines up the file, beneath a
     parent already written - so it is grouped into a catch-up section instead.
+
+    A reply older than `since` is outstanding too if it was backfilled by a run
+    later than `rendered_run`, the run that last wrote this file.
     """
     floor = ts_value(since)
     fresh, catch_up = [], []
@@ -164,7 +196,8 @@ def parts_since(messages: list, since: str) -> dict:
 
         # Older parent: only the replies that arrived since are outstanding.
         late = [r for r in message.get("thread_replies", [])
-                if ts_value(r.get("ts")) > floor]
+                if ts_value(r.get("ts")) > floor
+                or r.get(BACKFILL_RUN, 0) > rendered_run]
         if late:
             catch_up.append({"parent": message,
                              "replies": sorted(late,
@@ -238,6 +271,30 @@ def _self_test() -> None:
 
     assert newest_ts(archived) == "800.0", newest_ts(archived)
     assert newest_ts([]) == "0"
+
+    # A thread skipped by --no-threads: Slack's counters were stored, the replies
+    # were not. Its latest reply is older than the cutoff, so only the missing
+    # thread_replies list can say it still needs fetching.
+    skipped = [{"ts": "100.0", "reply_count": 1, "latest_reply": "150.0"},
+               {"ts": "300.0"}]
+    found = classify(skipped, [dict(m) for m in skipped], cutoff="300.0")
+    assert found["moved_threads"] == ["100.0"], found
+    merge(skipped, [], {"100.0": [{"ts": "150.0", "text": "old reply"}]},
+          cutoff="300.0", run=4)
+    assert skipped[0]["thread_replies"][0][BACKFILL_RUN] == 4
+    # A file written by run 3 gets the old reply once; one written by run 4 has it.
+    behind = parts_since(skipped, since="300.0", rendered_run=3)
+    assert [r["ts"] for e in behind["catch_up"] for r in e["replies"]] == ["150.0"]
+    assert is_empty(parts_since(skipped, since="300.0", rendered_run=4))
+    # Fetched once, it is not fetched again.
+    again = classify(skipped, [dict(m, reply_count=1, latest_reply="150.0")
+                               for m in skipped[:1]] + [{"ts": "300.0"}],
+                     cutoff="300.0")
+    assert again["moved_threads"] == [], again
+    # A thread whose replies all vanished is still marked as fetched.
+    empty = [{"ts": "100.0", "reply_count": 1, "latest_reply": "150.0"}]
+    merge(empty, [], {"100.0": []}, cutoff="300.0", run=1)
+    assert empty[0]["thread_replies"] == []
 
 
 if __name__ == "__main__":

@@ -56,6 +56,7 @@ Slack and added to it first:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -257,7 +258,12 @@ def committable_paths(paths) -> list:
     """
     exposed = []
     for path in paths:
-        path = Path(path).resolve()
+        # The folder is resolved, so /tmp and /private/tmp are one place to git,
+        # but not the file itself: write_atomic replaces a symlink where it sits
+        # rather than writing through it, so the link's own location is what git
+        # would see.
+        path = Path(path)
+        path = Path(os.path.abspath(path)).parent.resolve() / path.name
         folder = next(p for p in path.parents if p.is_dir())
         if not any((p / ".git").exists() for p in (folder, *folder.parents)):
             continue
@@ -277,10 +283,36 @@ def committable_paths(paths) -> list:
     return exposed
 
 
+def temp_path(path: Path) -> Path:
+    """Where write_atomic puts a file's contents before renaming it into place."""
+    return path.with_name(path.name + ".partial")
+
+
+def with_temp_paths(paths) -> list:
+    """Each path, followed by its temporary file: everything a write touches.
+
+    The temporary file holds the same private text as the finished one, and a run
+    that dies mid-write can leave it behind, so git must ignore it too. A rule
+    such as *.md does not cover C0123456789.md.partial.
+    """
+    return [p for path in paths for p in (Path(path), temp_path(Path(path)))]
+
+
+def _temp_file_hint(exposed) -> str:
+    """The extra advice when what git would see includes temporary files."""
+    if not any(p.name.endswith(".partial") for p in exposed):
+        return ""
+    return ("\n       Files ending in .partial hold the same text while it is being "
+            "saved, and an\n       interrupted save can leave one behind. If the "
+            "repository ignores the\n       finished files, add *.partial to its "
+            ".gitignore too.")
+
+
 def refuse_if_committable(paths) -> None:
-    """Exit before anything is written or fetched if an export could be committed."""
+    """Exit before anything is written or fetched if an export could be committed:
+    the finished files or the temporary files they are written through."""
     try:
-        exposed = committable_paths(paths)
+        exposed = committable_paths(with_temp_paths(paths))
     except GitCheckFailed as exc:
         sys.exit(f"FATAL: could not check whether the export would be ignored by git.\n"
                  f"       git said: {exc}\n"
@@ -292,7 +324,27 @@ def refuse_if_committable(paths) -> None:
                  f"       Exports hold private conversations and must not be "
                  f"committable. Use --out with\n"
                  f"       a directory outside the repository, or one it already "
-                 f"ignores.")
+                 f"ignores.{_temp_file_hint(exposed)}")
+
+
+def refuse_if_temp_paths_taken(paths) -> None:
+    """Exit before Slack is contacted if a temporary file's path is already taken.
+
+    write_atomic refuses such a path anyway, in the same step as creating the file;
+    this only says so up front, before anything is fetched. Nothing found is
+    removed: it may be a leftover from a crash, or a link to something else.
+    """
+    taken = [temp_path(Path(p)) for p in paths if os.path.lexists(temp_path(Path(p)))]
+    if taken:
+        listing = "\n".join(f"         {display_path(p)}" for p in taken)
+        sys.exit(f"FATAL: something is already where a temporary file goes:\n"
+                 f"{listing}\n"
+                 f"       It may be left over from an export that crashed, or a "
+                 f"link to another\n"
+                 f"       file. slack-export will not write through it or delete "
+                 f"it. Look at it,\n"
+                 f"       move or delete it yourself, then run the same command "
+                 f"again.")
 
 
 def write_atomic(path: Path, text: str) -> None:
@@ -307,15 +359,40 @@ def write_atomic(path: Path, text: str) -> None:
 
     The temp file is created owner-only, so there is no moment when the
     conversation is readable by anyone else, and the rename carries that mode onto
-    the finished file. The explicit chmod covers a .partial left behind by an
-    interrupted run, which os.open would reuse with whatever mode it already had.
+    the finished file. The fchmod covers a umask that would loosen it.
+
+    The temp file is created EXCLUSIVELY: if anything is already at that path -
+    a .partial left by a crash, a symlink, a hard link to some other file - the
+    open fails rather than following the link or truncating what is there, so no
+    other file can ever receive the conversation through it. Checking first and
+    opening after would leave a gap between the two; O_EXCL is a single step.
+    Whatever was found is left exactly as it was, for the person to look at.
+
+    If the write or the rename fails, the temporary file this call created is
+    removed rather than left holding a copy of the conversation. Callers check
+    beforehand that git ignores it anyway (with_temp_paths), because a crash
+    leaves no chance to clean up.
     """
-    temp = path.with_name(path.name + ".partial")
-    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, PRIVATE_FILE)
-    with os.fdopen(fd, "w") as handle:
-        os.chmod(temp, PRIVATE_FILE)
-        handle.write(text)
-    os.replace(temp, path)
+    temp = temp_path(path)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(temp, flags, PRIVATE_FILE)
+    except FileExistsError as exc:
+        raise FileExistsError(exc.errno, f"{temp.name} is in the way", str(temp)) \
+            from exc
+    try:
+        os.fchmod(fd, PRIVATE_FILE)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(temp, path)
+    except BaseException:
+        # Only ever the file created just above: the open was exclusive, so
+        # nothing that existed before this call can be at risk here.
+        try:
+            temp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def load_archive(path: Path):
@@ -361,27 +438,32 @@ def save_directory(data: dict, path: Path = None) -> None:
     """
     path = path or DIRECTORY_PATH
     try:
-        exposed = committable_paths([path])
+        exposed = committable_paths(with_temp_paths([path]))
     except GitCheckFailed as exc:
         sys.exit(f"FATAL: could not check whether {display_path(path)} is ignored "
                  f"by git.\n       git said: {exc}")
     if exposed:
+        names = " and ".join(p.name for p in exposed)
         sys.exit(f"FATAL: refusing to save channel names to {display_path(path)}:\n"
-                 f"       it is inside a git repository that does not ignore it, so "
-                 f"real channel\n"
-                 f"       names and IDs could be committed. Add it to that "
-                 f"repository's .gitignore.")
+                 f"       it is inside a git repository that does not ignore "
+                 f"{names},\n"
+                 f"       so real channel names and IDs could be committed. Add "
+                 f"{'them' if len(exposed) > 1 else 'it'} to that repository's "
+                 f".gitignore.{_temp_file_hint(exposed)}")
     make_private_dir(path.parent)
     write_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
 def record_in_directory(auth: dict, info: dict, conversation_id: str, stem: str,
-                        when_utc: str, path: Path = None) -> str:
+                        when_utc: str, path: Path = None,
+                        complete: bool = True) -> str:
     """Add this export to the conversation index, and say how it went in one line.
 
     Records the Slack channel name, the kind and the export name; a nickname is
     only ever set by `save`, so it is left alone. Runs after the export files are
-    written, so a failed export records nothing.
+    written, so a failed export records nothing. LAST EXPORTED moves only when
+    `complete`: the archive and every readable file of that export name are up to
+    date. A run that had to skip a file still records the names, but not the time.
 
     Never fails the export: the export is what was asked for, and the list can be
     fixed afterwards. Every problem - a damaged store, a git refusal, a write
@@ -395,8 +477,9 @@ def record_in_directory(auth: dict, info: dict, conversation_id: str, stem: str,
                                          info.get("name") or "")
         channel_directory.set_kind(store, team_id, team_name, conversation_id,
                                    channel_directory.kind_of(info))
-        channel_directory.record_export(store, team_id, team_name, conversation_id,
-                                        stem, when_utc)
+        if complete:
+            channel_directory.record_export(store, team_id, team_name,
+                                            conversation_id, stem, when_utc)
         save_directory(store, path)
     except (SystemExit, OSError) as exc:
         reason = str(exc.code if isinstance(exc, SystemExit) else exc)
@@ -405,7 +488,10 @@ def record_in_directory(auth: dict, info: dict, conversation_id: str, stem: str,
     row = next(r for r in channel_directory.search(store, conversation_id)
                if r["team_id"] == team_id and r["channel_id"] == conversation_id)
     # The same columns `list` prints - ID, nickname, Slack name - minus the header.
-    return channel_directory.format_rows([row])[0]
+    line = channel_directory.format_rows([row])[0]
+    if not complete:
+        line += "\n              (LAST EXPORTED not updated: a file was skipped)"
+    return line
 
 
 def swap_header(existing: str, new_header: str, marker: str):
@@ -667,9 +753,10 @@ def flag_broadcast_duplicates(messages: list) -> int:
 
 
 class ExportFailed(Exception):
-    """Slack would not hand over one conversation - a wrong ID, no access, or an
-    error partway through the fetch. Nothing was written for it, and the other
-    conversations in the same run can still go ahead."""
+    """One conversation could not be exported: Slack would not hand it over (a
+    wrong ID, no access, an error partway through the fetch), or a file could not
+    be written. Either way a retry is safe, and the other conversations in the
+    same run can still go ahead."""
 
 
 def connect() -> WebClient:
@@ -1413,6 +1500,68 @@ def copy_to_clipboard(document, wanted: bool) -> bool:
     return subprocess.run(["pbcopy"], input=document, text=True).returncode == 0
 
 
+def _fingerprint(text: str) -> str:
+    """A file's contents, reduced to compare against the file on disk later."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _recorded_key(mapping: dict, path: Path):
+    """The key under which `mapping` records `path`, or None.
+
+    Usually the path itself. On a disk that ignores capitals (the macOS default)
+    the same file can also have been recorded as Notes.md and now be asked for as
+    notes.md, so a recorded path that is the very same file counts too.
+    """
+    if str(path) in mapping:
+        return str(path)
+    for key in mapping:
+        try:
+            if os.path.samefile(key, path):
+                return key
+        except OSError:
+            continue
+    return None
+
+
+def settle_pending(archive, raw: dict) -> None:
+    """Carry an interrupted run's finished writes into `raw`'s record of files.
+
+    A run that died between its archive writes left "pending" entries: what each
+    file was about to become, as a fingerprint. Where the file on disk matches,
+    that write happened, so the file is recorded as written that far; where it
+    does not, it never happened, and the file is still where the record says.
+    Every entry is settled, not only this run's files, so a retry that writes
+    elsewhere (another --out folder) loses track of nothing.
+    """
+    for key, entry in (archive or {}).get("pending", {}).items():
+        try:
+            on_disk = Path(key).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if _fingerprint(on_disk) == entry["sha256"]:
+            _record_written(raw, Path(key), entry["through"], entry["run"])
+
+
+def file_progress(raw: dict, path: Path):
+    """How far a readable file has been written: (newest ts in it, run that wrote
+    it), or None when the archive has no record of writing it."""
+    key = _recorded_key(raw["rendered"], path)
+    if key is None:
+        return None
+    return raw["rendered"][key], raw["rendered_run"].get(key, 0)
+
+
+def _record_written(raw: dict, path: Path, through: str, run: int) -> None:
+    """Record `path` as written through `through` by `run`, replacing any older
+    record of the same file under another spelling."""
+    for mapping in (raw["rendered"], raw["rendered_run"]):
+        alias = _recorded_key(mapping, path)
+        if alias is not None and alias != str(path):
+            del mapping[alias]
+    raw["rendered"][str(path)] = through
+    raw["rendered_run"][str(path)] = run
+
+
 def export_one(client: WebClient, job: dict, args, granted: list, auth: dict,
                position: int, total: int) -> None:
     """Fetch one conversation and write or top up its three files.
@@ -1421,8 +1570,9 @@ def export_one(client: WebClient, job: dict, args, granted: list, auth: dict,
     the file stem and paths, and the archive already on disk, if any. `position`
     and `total` only label the progress banner when several are exported.
 
-    Raises ExportFailed when Slack refuses the conversation, before any file for
-    it is written; main() decides whether that ends the run.
+    Raises ExportFailed when Slack refuses the conversation (before any file for
+    it is written) or a write fails (leaving what a retry needs to finish without
+    repeating anything); main() decides whether that ends the run.
     """
     conversation_id = job["conversation_id"]
     stem, archive = job["stem"], job["archive"]
@@ -1448,6 +1598,9 @@ def export_one(client: WebClient, job: dict, args, granted: list, auth: dict,
     print()
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    # Counts the runs that have written this archive; see settle_pending() and
+    # incremental.parts_since().
+    run = (archive or {}).get("run", 0) + 1
 
     try:
         if archive is None:
@@ -1486,7 +1639,8 @@ def export_one(client: WebClient, job: dict, args, granted: list, auth: dict,
                 if index % 10 == 0 or index == total_threads:
                     print(f"  thread {index:>4}/{total_threads} re-read", flush=True)
 
-            added = incremental.merge(messages, found["new_top"], replies_by_parent)
+            added = incremental.merge(messages, found["new_top"], replies_by_parent,
+                                      cutoff=cutoff, run=run)
             stats = {"threads": added["updated_threads"], "claimed": 0,
                      "fetched": added["new_replies"], "mismatches": []}
     except SlackApiError as exc:
@@ -1507,7 +1661,10 @@ def export_one(client: WebClient, job: dict, args, granted: list, auth: dict,
         "conversation_label": label,
         "conversation_info": info,
         "granted_scopes": granted,
-        "threads_expanded": not args.no_threads,
+        # True only when every thread has actually been fetched, however many
+        # runs that took; an earlier --no-threads run is caught up on later.
+        "threads_expanded": all("thread_replies" in m for m in messages
+                                if m.get("reply_count")),
         "top_level_count": len(messages),
         "reply_count": reply_total,
         "total_message_count": len(messages) + reply_total,
@@ -1516,6 +1673,13 @@ def export_one(client: WebClient, job: dict, args, granted: list, auth: dict,
         # per PATH because the same conversation can be rendered into several
         # folders, each of them a different number of runs behind.
         "rendered": dict((archive or {}).get("rendered", {})),
+        # Per output file, the run that last wrote it; with "run", this is how a
+        # reply backfilled into an old thread reaches files written before it.
+        "run": run,
+        "rendered_run": dict((archive or {}).get("rendered_run", {})),
+        # Between the two archive writes below: what each file is being turned
+        # into. Empty once a run has finished.
+        "pending": {},
         "messages": messages,
     }
 
@@ -1525,60 +1689,94 @@ def export_one(client: WebClient, job: dict, args, granted: list, auth: dict,
     users = render_markdown.build_user_map(client, participants)
     when = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")
 
+    settle_pending(archive, raw)
+
+    # Every file's new contents are worked out before anything is written, so a
+    # failure while rendering leaves every file exactly as it was.
     document = None      # what goes on the clipboard
-    written = []
+    written = []         # (path, what happened, messages added) for the summary
+    planned = []         # (path, new contents, what, count) still to be written
+    current = []         # files already up to date
     for path, module in ((txt_path, render_text), (md_path, render_markdown)):
         is_md = module is render_markdown
-        full = (module.render(raw, users, info_url, when) if is_md
-                else module.render(raw, users, when))
 
         if not path.exists():
             # Nothing here yet - write the whole conversation, however much of it
             # arrived on earlier runs.
-            write_atomic(path, full)
-            written.append((path, "written in full", None))
+            full = (module.render(raw, users, info_url, when) if is_md
+                    else module.render(raw, users, when))
+            planned.append((path, full, "written in full", None))
             if is_md:
                 document = full
-            raw["rendered"][str(path)] = raw["last_ts"]
             continue
 
-        seen_to = raw["rendered"].get(str(path))
-        if seen_to is None:
+        progress = file_progress(raw, path)
+        if progress is None:
             # The archive tracks progress per absolute path, so a file that was
             # renamed or moved is indistinguishable from somebody else's file of
             # the same name. Appending blind could duplicate or lose messages.
             written.append((path, "SKIPPED - no record of writing this file", None))
             continue
 
-        parts = incremental.parts_since(messages, seen_to)
+        through, done_run = progress
+        parts = incremental.parts_since(messages, through, done_run)
         if incremental.is_empty(parts):
             written.append((path, "already up to date", None))
-            raw["rendered"][str(path)] = raw["last_ts"]
+            current.append(path)
             continue
 
         chunk = (module.render_append(parts, users, info_url,
                                       conversation_id, when) if is_md
                  else module.render_append(parts, users, when))
-        body = swap_header(path.read_text(),
+        body = swap_header(path.read_text(encoding="utf-8"),
                            module.header(raw, users, when), module.HEADER_RULE)
         if body is None:
             written.append((path, "SKIPPED - no header found, not ours", None))
             continue
 
-        write_atomic(path, body.rstrip("\n") + "\n" + chunk)
         count = len(parts["fresh"]) + sum(len(e["replies"])
                                           for e in parts["catch_up"])
-        written.append((path, "appended", count))
+        planned.append((path, body.rstrip("\n") + "\n" + chunk, "appended", count))
         if is_md:
             document = chunk
-        raw["rendered"][str(path)] = raw["last_ts"]
 
-    write_atomic(raw_path, json.dumps(raw, indent=2, ensure_ascii=False))
-    # Only now that every file is safely written. In the store's own time format,
-    # not the archive's compact stamp, so export times always sort together.
+    # Three steps, because several files cannot be replaced as one: (1) the
+    # archive, holding everything fetched and a fingerprint of what each file is
+    # about to become; (2) the files; (3) the archive again, recording them as
+    # written. Each single write is atomic. A run that dies anywhere in between
+    # leaves a retry able to tell, file by file, whether its write happened (see
+    # settle_pending), so nothing is appended twice and nothing fetched is lost.
+    for path in current:
+        _record_written(raw, path, raw["last_ts"], run)
+    raw["pending"] = {str(path): {"through": raw["last_ts"], "run": run,
+                                  "sha256": _fingerprint(text)}
+                      for path, text, _, _ in planned}
+    target = raw_path
+    try:
+        write_atomic(raw_path, json.dumps(raw, indent=2, ensure_ascii=False))
+        for target, text, what, count in planned:
+            write_atomic(target, text)
+            written.append((target, what, count))
+        for path, _, _, _ in planned:
+            _record_written(raw, path, raw["last_ts"], run)
+        raw["pending"] = {}
+        target = raw_path
+        write_atomic(raw_path, json.dumps(raw, indent=2, ensure_ascii=False))
+    except OSError as exc:
+        raise ExportFailed(
+            f"could not write {display_path(target)} ({exc.strerror or exc}).\n"
+            f"       Run the same command again once that is fixed: it carries on "
+            f"from where it stopped, without repeating anything.") from exc
+
+    skipped = any(what.startswith("SKIPPED") for _, what, _ in written)
+    # Only now that every file is safely written, and only if none was skipped:
+    # LAST EXPORTED means the archive AND every readable file are up to date. In
+    # the store's own time format, not the archive's compact stamp, so export
+    # times always sort together.
     listed = record_in_directory(
         auth, info, conversation_id, stem,
-        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        complete=not skipped)
 
     copied = copy_to_clipboard(document, args.copy)
 
@@ -1622,11 +1820,12 @@ def export_one(client: WebClient, job: dict, args, granted: list, auth: dict,
         print("  clipboard: not copied (add --copy to copy the Markdown)")
     print(f"  conversation index: {listed}")
 
-    if any(what.startswith("SKIPPED") for _, what, _ in written):
+    if skipped:
         print()
         print("  A file was left alone: either this tool did not write it, or it "
               "was\n  moved or renamed since, so there is no record of how far it "
-              "got.\n  Move it aside and re-run to write a fresh copy.")
+              "got.\n  Move it aside and re-run to write a fresh copy. LAST "
+              "EXPORTED is not\n  updated until every file is.")
 
 
 
@@ -1684,7 +1883,10 @@ def main() -> None:
                         help="where to put the .md and .txt "
                              "(default: exports/; the .raw.json archive always "
                              "stays in exports/raw/)")
-    args = parser.parse_args()
+    # Intermixed, so a flag can sit between targets as well as after them -
+    # `ID Lab --out DIR ID Meeting` - and every word that is not a flag still
+    # reaches split_targets in the order it was typed.
+    args = parser.parse_intermixed_args()
 
     _self_test()
     incremental._self_test()
@@ -1710,14 +1912,24 @@ def main() -> None:
 
     # Two conversations under one name would share one set of files: the second
     # would overwrite the first's archive and be refused by its transcripts. Names
-    # that differ only in punctuation ("A&B", "A B") meet here too, as A-B.
+    # that differ only in punctuation ("A&B", "A B") meet here too, as A-B, and so
+    # do names that differ only in capitals: macOS and Windows disks normally treat
+    # Notes.md and notes.md as one file. Compared that way everywhere, so the same
+    # command never means different things on different disks.
     owner = {}
     for job in jobs:
-        other = owner.setdefault(job["stem"], job["conversation_id"])
-        if other != job["conversation_id"]:
-            sys.exit(f"FATAL: {other} and {job['conversation_id']} would both be "
-                     f"saved under the file name \"{job['stem']}\".\n"
-                     f"       Give each conversation its own name.")
+        other = owner.setdefault(job["stem"].casefold(), job)
+        if other["conversation_id"] == job["conversation_id"]:
+            continue
+        if other["stem"] == job["stem"]:
+            where = f"under the file name \"{job['stem']}\""
+        else:
+            where = (f"under the file names \"{other['stem']}\" and "
+                     f"\"{job['stem']}\",\n       which most Macs treat as the "
+                     f"same file")
+        sys.exit(f"FATAL: {other['conversation_id']} and {job['conversation_id']} "
+                 f"would both be saved {where}.\n"
+                 f"       Give each conversation its own name.")
 
     # Before any folder is created, the Keychain is read, or Slack is contacted:
     # a private conversation is never written where git could commit it. Every
@@ -1725,6 +1937,8 @@ def main() -> None:
     # turn up after the others have been fetched.
     refuse_if_committable([job[key] for job in jobs
                            for key in ("md_path", "txt_path", "raw_path")])
+    refuse_if_temp_paths_taken([job[key] for job in jobs
+                                for key in ("md_path", "txt_path", "raw_path")])
     if args.out is not None:
         create_out_dir(out_dir)
 

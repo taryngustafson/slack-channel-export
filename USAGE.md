@@ -135,7 +135,7 @@ To name the files, put each name after its ID. The words after an ID, up to the 
 slack-export C0123456789 Project Planning D0123456789 Alice G0123456789
 ```
 
-This saves `Project-Planning`, `Alice` and `G0123456789`. Any word that is a conversation ID or a Slack link starts the next conversation, so a name cannot contain one. Two conversations cannot share a name, because they would share files. That is refused before anything is exported.
+This saves `Project-Planning`, `Alice` and `G0123456789`. Any word that is a conversation ID or a Slack link starts the next conversation, so a name cannot contain one. Two conversations cannot share a name, because they would share files. That includes names that differ only in capitals, such as `Notes` and `notes`, because most Macs treat `Notes.md` and `notes.md` as the same file. Both are refused before anything is exported.
 
 If Slack refuses one of them (a mistyped ID, or a channel you are not in), that one is skipped and the rest are still exported, whatever order you typed them in. The summary at the end says which failed and why:
 
@@ -292,7 +292,15 @@ If you already have:
 Team-Notes.md
 ```
 
-for one channel and try to use `Team Notes` for another channel, the exporter refuses rather than combining the two conversations.
+for one channel and try to use `Team Notes` for another channel, the exporter refuses rather than combining the two conversations. The same goes for `team notes`: on most Macs, names that differ only in capitals are the same file.
+
+### If an export is interrupted
+
+If an export stops partway, for example because the disk is full or the Mac goes to sleep, **run the same command again**. It finishes the update from where it stopped, without adding any message twice and without losing any it had already downloaded.
+
+If the Mac shut down or the program was killed mid-save, a file ending in `.partial` may be left beside the export. The next run stops and names it rather than deleting it, since it cannot be sure the file is its own. Delete it, then run the command again.
+
+One limit: if you edit one of the export's files before running it again, the exporter can no longer tell whether the interrupted run had finished writing that file. It treats the file as not yet updated, so the new messages may appear in it twice.
 
 ## Find a conversation again
 
@@ -394,7 +402,7 @@ The nickname column shows:
 
 The Slack channel name column shows the name Slack gives the conversation. DMs do not have Slack channel names, so a DM shows `(DM)`. A group DM technically has an internal Slack name beginning with `mpdm-`, but that is not very useful to a person, so it also shows as `(DM)` unless someone has given the group DM a name. A normal Slack channel whose actual name starts with `mpdm-` is still shown normally.
 
-The last-exported column shows how long ago the conversation was most recently exported, under any file name: `just now`, then minutes, hours, days (up to 13), weeks (up to 8), months, and years. A `-` means it has never been exported, only saved or added to a group.
+The last-exported column shows how long ago the conversation was most recently exported, under any file name. An export counts only when its archive and both readable files were brought up to date. If a file was skipped because the exporter did not recognize it, the column keeps its previous time, and the export's summary says so. The wording runs: `just now`, then minutes, hours, days (up to 13), weeks (up to 8), months, and years. A `-` means it has never been exported, only saved or added to a group.
 
 This is when *you* last ran an export, not whether Slack has new messages since. A quiet channel exported a month ago shows `1 month ago` even if nothing has been posted. The exact date and time of each export is kept in the conversation index; only the wording here is rounded.
 
@@ -718,7 +726,11 @@ Most exports only need the basic command:
 slack-export C0123456789
 ```
 
-The following options are available when you need them.
+The following options are available when you need them. They can go anywhere after `slack-export`, including between conversations:
+
+```sh
+slack-export C0123456789 Lab --out ~/Desktop D0123456789 Meeting
+```
 
 ### Choose another output folder
 
@@ -764,7 +776,7 @@ slack-export C0123456789 --no-threads
 
 This exports only top-level messages.
 
-It is faster, but any conversation inside threads will be missing.
+It is faster, but any conversation inside threads will be missing. Run the same export later without `--no-threads` and the replies it skipped are downloaded and added to your files.
 
 ## Re-render an existing raw export
 
@@ -868,6 +880,16 @@ Choose:
 
 For example, the project's normal `exports/` directory is already configured appropriately.
 
+Every file is first written under a temporary name ending in `.partial`, then renamed. The temporary file holds the same private text, so the repository has to ignore it too. A `.gitignore` that lists `*.md` and `*.txt` does not cover `notes.md.partial`. If the message lists `.partial` files, add `*.partial` to that `.gitignore`.
+
+### `something is already where a temporary file goes`
+
+Each file is saved under a temporary name ending in `.partial` and then renamed. Something already exists at one of those names: usually a leftover from an export that crashed, but it could be a link to another file. slack-export never writes through it, overwrites it or deletes it. Look at the file the message names, move or delete it, then run the same command again.
+
+### `could not write ...`
+
+A file could not be saved, usually because the disk is full or a folder's permissions changed. Fix that, then run the same command again. It carries on from where it stopped, without repeating anything (see [If an export is interrupted](#if-an-export-is-interrupted)). In an export of several conversations, the others still go ahead.
+
 ### `conversation index: NOT updated - the export itself is fine`
 
 The export worked, but it could not be added to the conversation index. The line below it gives the reason. Your exported files are complete.
@@ -886,7 +908,7 @@ mv ~/.config/slack-export/channels.json ~/.config/slack-export/channels.json.old
 
 ### `refusing to save channel names to ~/.config/slack-export/channels.json`
 
-The conversation index is inside a Git repository that does not ignore it, so its names and IDs could be committed. Add `channels.json` to that repository's `.gitignore`.
+The conversation index is inside a Git repository that does not ignore it, so its names and IDs could be committed. Add `channels.json` to that repository's `.gitignore`, and `*.partial` as well, for the temporary file it is saved through.
 
 ### `conversation not found or not accessible`
 

@@ -867,13 +867,15 @@ class ListCommandTests(CommandTest):
             with self.subTest(word=word):
                 code, out, err = self.run_main("list", "--sort-by", word)
                 self.assertEqual((code, out), (2, ""))
-                self.assertIn("'name', 'id', 'nickname', 'export'", err)
+                # Python 3.12 quotes each choice and 3.13 does not; the
+                # choices and their order are what matter.
+                self.assertIn("name, id, nickname, export", err.replace("'", ""))
 
     def test_an_unknown_sort_order_is_refused(self):
         self.fill_exported()
         code, out, err = self.run_main("list", "--sort-by", "size")
         self.assertEqual((code, out), (2, ""))
-        self.assertIn("'name', 'id', 'nickname', 'export'", err)
+        self.assertIn("name, id, nickname, export", err.replace("'", ""))
 
     def test_sort_applies_to_a_search_and_to_group_views(self):
         self.fill_exported()

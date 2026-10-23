@@ -117,6 +117,14 @@ Project-Planning.raw.json
 
 If you do not provide a name, the conversation ID is used instead.
 
+### Export several at once
+
+```sh
+slack-export C0123456789 Project Planning D0123456789 G0123456789 Alice
+```
+
+Each conversation is exported in turn. The words after an ID, up to the next ID, name that conversation's files; an ID with nothing after it keeps its ID as the name. If Slack refuses one (a mistyped ID, or a channel you are not in), the others are still exported, and a summary at the end lists what failed.
+
 ### Common options
 
 ```sh
@@ -137,7 +145,7 @@ slack-export C0123456789 --out ~/Desktop
 
 Put the readable `.txt` and `.md` files in another folder.
 
-Options can be combined with a name:
+Options can be combined with a name, and can go anywhere after `slack-export`:
 
 ```sh
 slack-export C0123456789 Project Planning --copy
@@ -249,6 +257,8 @@ The exporter checks the existing raw archive, downloads what has appeared since 
 
 With `--copy`, only the newly fetched messages are copied.
 
+If an export is interrupted partway, run the same command again. It finishes the update without adding anything twice.
+
 The existing exported text is not rewritten. If an older Slack message has since been edited, your previous export keeps the version that was captured at the time.
 
 More details are in **[USAGE.md](USAGE.md)**.
@@ -262,8 +272,9 @@ Slack exports can contain private conversations, so the project includes several
 * the token is stored in macOS Keychain rather than in the project files
 * generated export files and the conversation index are created with owner-only permissions
 * `exports/` is ignored by Git, and the conversation index is kept outside the project folder
-* if generated files or the conversation index are inside a Git repository, the exporter refuses to write them if Git could track them
-* the tool reads only the conversation you explicitly provide
+* if generated files or the conversation index are inside a Git repository, the exporter refuses to write them if Git could track them, including the temporary `.partial` files they are saved through
+* temporary files are created fresh every time, never written through an existing file or link
+* the tool reads only the conversations you explicitly provide
 * attachments are exported as links rather than downloaded
 
 The full permission model is explained in **[SLACK-SETUP.md](SLACK-SETUP.md)** and is also visible directly in `slack-export-app-manifest.yaml`.
