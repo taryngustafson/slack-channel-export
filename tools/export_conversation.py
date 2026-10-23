@@ -72,6 +72,7 @@ from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 
 # Same directory as this script, so a plain import works when run as a script.
 import channel_directory
+import destinations
 import incremental
 import render_markdown
 import render_text
@@ -1563,27 +1564,32 @@ def _record_written(raw: dict, path: Path, through: str, run: int) -> None:
 
 
 def export_one(client: WebClient, job: dict, args, granted: list, auth: dict,
-               position: int, total: int) -> None:
-    """Fetch one conversation and write or top up its three files.
+               position: int, total: int, compact: bool = False) -> None:
+    """Fetch one conversation and write or top up its archive and transcripts.
 
-    `job` is what main() worked out before Slack was contacted: the conversation,
-    the file stem and paths, and the archive already on disk, if any. `position`
-    and `total` only label the progress banner when several are exported.
+    `job` is what was worked out before Slack was contacted: the conversation,
+    the file stem, the archive path and the archive already on disk, if any, and
+    `outputs`, the (.md, .txt) pair in each folder to write. Usually one pair; a
+    group export passes every folder that holds a copy under this stem, so one
+    fetch serves them all. `position` and `total` only label the progress banner
+    when several are exported. `compact` prints a few lines instead of the full
+    report, for a group export.
 
     Raises ExportFailed when Slack refuses the conversation (before any file for
     it is written) or a write fails (leaving what a retry needs to finish without
-    repeating anything); main() decides whether that ends the run.
+    repeating anything); the caller decides whether that ends the run.
     """
     conversation_id = job["conversation_id"]
     stem, archive = job["stem"], job["archive"]
-    raw_path, md_path, txt_path = job["raw_path"], job["md_path"], job["txt_path"]
+    raw_path, outputs = job["raw_path"], job["outputs"]
     info_url = auth["url"]
 
-    print()
-    print("=" * 63)
-    of = f"  ({position} of {total})" if total > 1 else ""
-    print(f" FETCHING {conversation_id}{of}")
-    print("=" * 63)
+    if not compact:
+        print()
+        print("=" * 63)
+        of = f"  ({position} of {total})" if total > 1 else ""
+        print(f" FETCHING {conversation_id}{of}")
+        print("=" * 63)
 
     try:
         info = client.conversations_info(channel=conversation_id)["channel"]
@@ -1593,9 +1599,12 @@ def export_one(client: WebClient, job: dict, args, granted: list, auth: dict,
     kind = "DM" if info.get("is_im") else ("private channel" if info.get("is_private")
                                            else "public channel")
     label = info.get("name") or f"DM with {info.get('user', 'unknown')}"
-    print(f"  type       : {kind}")
-    print(f"  label      : {label}")
-    print()
+    if compact:
+        print(f"  {kind}: {label}")
+    else:
+        print(f"  type       : {kind}")
+        print(f"  label      : {label}")
+        print()
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     # Counts the runs that have written this archive; see settle_pending() and
@@ -1615,9 +1624,11 @@ def export_one(client: WebClient, job: dict, args, granted: list, auth: dict,
         else:
             messages = archive["messages"]
             cutoff = archive.get("last_ts") or incremental.newest_ts(messages)
-            print(f"  topping up an export of {len(messages)} top-level messages")
-            print(f"  last one seen {render_markdown.stamp(cutoff)}")
-            print()
+            if not compact:
+                print(f"  topping up an export of {len(messages)} top-level "
+                      f"messages")
+                print(f"  last one seen {render_markdown.stamp(cutoff)}")
+                print()
 
             # The top-level history is cheap - a few pages - and carries Slack's
             # own reply_count and latest_reply for every message. Comparing those
@@ -1683,9 +1694,10 @@ def export_one(client: WebClient, job: dict, args, granted: list, auth: dict,
         "messages": messages,
     }
 
-    print()
     participants = render_markdown.collect_user_ids(messages, info)
-    print(f"  resolving {len(participants)} participant names ...", flush=True)
+    if not compact:
+        print()
+        print(f"  resolving {len(participants)} participant names ...", flush=True)
     users = render_markdown.build_user_map(client, participants)
     when = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")
 
@@ -1697,7 +1709,10 @@ def export_one(client: WebClient, job: dict, args, granted: list, auth: dict,
     written = []         # (path, what happened, messages added) for the summary
     planned = []         # (path, new contents, what, count) still to be written
     current = []         # files already up to date
-    for path, module in ((txt_path, render_text), (md_path, render_markdown)):
+    files = [(path, module) for md_path, txt_path in outputs
+             for path, module in ((txt_path, render_text),
+                                  (md_path, render_markdown))]
+    for path, module in files:
         is_md = module is render_markdown
 
         if not path.exists():
@@ -1780,6 +1795,24 @@ def export_one(client: WebClient, job: dict, args, granted: list, auth: dict,
 
     copied = copy_to_clipboard(document, args.copy)
 
+    if compact:
+        if archive is None:
+            print(f"  new export : {len(messages)} top-level, {reply_total} replies")
+        else:
+            print(f"  new since  : {added['new_top']} top-level, "
+                  f"{added['new_replies']} replies")
+        for path, what, count in written:
+            detail = f"{what} (+{count})" if count else what
+            print(f"  {path.suffix.lstrip('.').upper():<9}: {display_path(path)}"
+                  f"   [{detail}]")
+        if listed.startswith("NOT updated"):
+            print(f"  conversation index: {listed}")
+        if skipped:
+            print("  A file was left alone (no record of writing it); LAST EXPORTED "
+                  "is not\n  updated for this one until it is moved aside and "
+                  "re-exported.")
+        return
+
     print()
     print("=" * 63)
     print(" RESULT")
@@ -1829,10 +1862,249 @@ def export_one(client: WebClient, job: dict, args, granted: list, auth: dict,
 
 
 
+def _wants_group_export(argv) -> bool:
+    """True when the command line asks to export a group: --group anywhere."""
+    return any(word == "--group" or word.startswith("--group=") for word in argv)
+
+
+def _member_label(store: dict, team_id: str, conversation_id: str) -> str:
+    """What the conversation index calls a conversation: nickname, else Slack name."""
+    entry = store["workspaces"].get(team_id, {}).get("channels", {}).get(
+        conversation_id, {})
+    return entry.get("nickname") or entry.get("slack_name") or ""
+
+
+def _group_jobs(conversation_id: str, places: list) -> list:
+    """One job per archive name (stem), holding every folder written under it.
+
+    A stem is one archive with one incremental history, so it is fetched once
+    and every folder holding a copy under it is written from that fetch. Two
+    stems are two archives, each a different number of runs behind, so each is
+    fetched for itself: one fetch cannot be trusted to bring both up to date.
+    """
+    jobs = {}
+    for place in places:
+        stem, folder = place["stem"], place["folder"]
+        job = jobs.setdefault(stem, {
+            "conversation_id": conversation_id, "typed": "", "stem": stem,
+            "raw_path": RAW_DIR / f"{stem}.raw.json", "outputs": [],
+            "fresh": place["fresh"]})
+        job["outputs"].append((folder / f"{stem}.md", folder / f"{stem}.txt"))
+    return list(jobs.values())
+
+
+def group_export(argv) -> None:
+    """`slack-export --group NAME`: export or top up every conversation in a group.
+
+    Works out every destination first, offline (see destinations.py): each copy
+    that still exists is topped up where it is, under its own name; one with no
+    copy left gets a fresh one named by its ID. Anything that could overwrite or
+    mix conversations - two members under one name, an archive holding another
+    conversation, a path git could commit, a stray temporary file - stops the
+    whole run before Slack is contacted. After that, a member that fails is
+    reported and skipped, and the rest carry on; the exit code is 1 if any failed.
+    """
+    parser = argparse.ArgumentParser(
+        prog="slack-export",
+        usage="slack-export --group name [--out DIR] [--no-threads]",
+        description="Export every conversation in a group, one after another. "
+                    "Each copy already exported is topped up where it is; a "
+                    "conversation with no copy left gets a new one named by its "
+                    "ID. Put a name with spaces in quotes.")
+    parser.add_argument("--group", action="append", required=True, metavar="name",
+                        help="the group to export")
+    parser.add_argument("--out", metavar="DIR",
+                        help="only update copies in DIR, adding new ones there")
+    parser.add_argument("--no-threads", action="store_true",
+                        help="top-level messages only")
+    # Accepted only to be refused with a reason, rather than argparse's own error.
+    parser.add_argument("--copy", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--no-clipboard", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("words", nargs="*", help=argparse.SUPPRESS)
+    args = parser.parse_intermixed_args(argv)
+
+    if len(args.group) > 1:
+        sys.exit("FATAL: one group at a time. Run slack-export --group once for "
+                 "each.")
+    if args.copy:
+        sys.exit("FATAL: --copy works with one conversation at a time, not with "
+                 "--group.")
+    if args.words:
+        if any(parse_conversation_id(word) for word in args.words):
+            sys.exit("FATAL: --group cannot be combined with conversation IDs.\n"
+                     "       Export the group and the other conversations in "
+                     "separate commands.")
+        sys.exit(f"FATAL: --group takes one name; {_quote(args.words[0])} was left "
+                 f"over.\n       Put a name with spaces in quotes: "
+                 f"--group \"{args.group[0]} {' '.join(args.words)}\"")
+
+    _self_test()
+    incremental._self_test()
+
+    out_dir = resolve_out_dir(args.out) if args.out is not None else None
+    store = load_directory()
+    name = args.group[0].strip()
+    if name not in store.get("groups", {}):
+        sys.exit(_no_such_group(store, name))
+    members = []
+    for member in store["groups"][name]:
+        pair = (member["workspace"], member["channel"])
+        if pair not in members:
+            members.append(pair)
+    if not members:
+        print(f"Group '{name}' has no conversations in it, so there is nothing to "
+              f"export.\nAdd some with: slack-export group {_quote(name)} ID ...")
+        return
+
+    # Where every member goes, worked out before anything is written.
+    try:
+        copies = destinations.recorded_copies(RAW_DIR)
+    except destinations.UnreadableArchive as exc:
+        sys.exit(f"FATAL: {display_path(exc.path)} is unreadable ({exc.reason}).\n"
+                 f"       Every archive is read to find where each conversation's "
+                 f"files are, so\n       nothing is exported until it is fixed or "
+                 f"moved out of {display_path(RAW_DIR)}.")
+    plan = {conversation_id: destinations.destinations(
+                conversation_id, copies, EXPORT_DIR, out_dir)
+            for _, conversation_id in members}
+
+    clash = destinations.clashes(plan)
+    if clash:
+        lines = [f"       {', '.join(ids)} would all be saved under \"{stem}\""
+                 for stem, ids in clash]
+        sys.exit("FATAL: two conversations in this group would share files:\n"
+                 + "\n".join(lines)
+                 + "\n       (names that differ only in capitals count as the "
+                   "same on most Macs).\n       Nothing was exported.")
+
+    jobs = {conversation_id: _group_jobs(conversation_id, places)
+            for conversation_id, places in plan.items()}
+    every_job = [job for member_jobs in jobs.values() for job in member_jobs]
+
+    # A fresh copy's archive (named by its ID) must not belong to anything else:
+    # topping it up would mix two conversations in one file.
+    owner = {stem.casefold(): conversation_id
+             for conversation_id, entry in copies.items()
+             for stem in entry["stems"]}
+    for job in every_job:
+        held = owner.get(job["stem"].casefold(), job["conversation_id"])
+        if held != job["conversation_id"]:
+            sys.exit(f"FATAL: {display_path(job['raw_path'])} already holds a "
+                     f"different conversation.\n"
+                     f"       held : {held}\n"
+                     f"       asked: {job['conversation_id']}\n"
+                     f"       Move that archive aside. Nothing was exported.")
+
+    paths = [path for job in every_job
+             for pair in job["outputs"] for path in pair] + [
+             job["raw_path"] for job in every_job]
+    refuse_if_committable(paths)
+    refuse_if_temp_paths_taken(paths)
+
+    # A fresh copy goes where there is no record of a copy; a file already
+    # there was not written by any export of this conversation, so it would be
+    # left alone and the pair half-written. That member is skipped instead.
+    failed = {}
+    for conversation_id, member_jobs in jobs.items():
+        for job in member_jobs:
+            if not job["fresh"]:
+                continue
+            taken = [path for pair in job["outputs"] for path in pair
+                     if path.exists()]
+            if taken:
+                failed[conversation_id] = (
+                    f"{display_path(taken[0])} already exists, but no export of "
+                    f"this conversation\n               wrote it. Move it aside "
+                    f"to export this one.")
+
+    print("=" * 63)
+    print(f" GROUP {_quote(name)}: {_count(len(members))}")
+    print("=" * 63)
+    print("  each place is a .md and .txt pair")
+    for team_id, conversation_id in members:
+        label = _member_label(store, team_id, conversation_id)
+        places = plan[conversation_id]
+        existing = sum(1 for place in places if not place["fresh"])
+        several = f"   ({existing} copies, each updated)" if existing > 1 else ""
+        print(f"  {conversation_id:<13}{label}{several}".rstrip())
+        for place in places:
+            where = display_path(place["folder"] / place["stem"])
+            why = f"   (new: {place['fresh']})" if place["fresh"] else ""
+            print(f"      -> {where}{why}")
+        if out_dir is not None:
+            elsewhere = len(copies.get(conversation_id, {}).get("copies", [])) - sum(
+                1 for p in places if not p["fresh"])
+            if elsewhere:
+                print(f"      ({elsewhere} other "
+                      f"{'copy' if elsewhere == 1 else 'copies'} outside "
+                      f"{display_path(out_dir)} left alone)")
+    print()
+
+    if out_dir is not None:
+        create_out_dir(out_dir)
+
+    client = connect()
+    print("=" * 63)
+    print(" PRE-FLIGHT")
+    print("=" * 63)
+    granted, auth = assert_read_only(client)
+
+    for team_id, conversation_id in members:
+        if team_id != auth["team_id"] and conversation_id not in failed:
+            saved_in = store["workspaces"].get(team_id, {}).get("name") or team_id
+            failed[conversation_id] = (
+                f"saved from another Slack workspace ({saved_in}); this token "
+                f"is for {auth['team']}")
+
+    # One after another: Slack rate-limits per token.
+    for position, (team_id, conversation_id) in enumerate(members, start=1):
+        print()
+        label = _member_label(store, team_id, conversation_id)
+        print(f"[{position}/{len(members)}] {conversation_id}  {label}".rstrip())
+        if conversation_id in failed:
+            print(f"  SKIPPED    : {failed[conversation_id]}")
+            continue
+        for job in jobs[conversation_id]:
+            archive = load_archive(job["raw_path"])
+            try:
+                if archive and archive.get("conversation_id") != conversation_id:
+                    raise ExportFailed(f"{display_path(job['raw_path'])} now holds "
+                                       f"a different conversation")
+                job["archive"] = archive
+                export_one(client, job, args, granted, auth, position,
+                           len(members), compact=True)
+            except ExportFailed as exc:
+                failed[conversation_id] = str(exc)
+                print(f"  FAILED     : {exc} - carrying on")
+                break
+
+    done = len(members) - len(failed)
+    print()
+    print("=" * 63)
+    print(f" DONE: {done} of {_count(len(members))} exported "
+          f"(group {_quote(name)})")
+    print("=" * 63)
+    for _, conversation_id in members:
+        reason = failed.get(conversation_id)
+        if reason:
+            print(f"  {conversation_id:<13}FAILED: {reason}")
+            continue
+        wrote = [display_path(md) for job in jobs[conversation_id]
+                 for md, _ in job["outputs"]]
+        print(f"  {conversation_id:<13}{wrote[0]}")
+        for more in wrote[1:]:
+            print(f"  {'':<13}{more}")
+    if failed:
+        sys.exit(1)
+
+
 def main() -> None:
     argv = sys.argv[1:]
     if argv and argv[0] in COMMANDS:
         COMMANDS[argv[0]](argv[1:])
+        return
+    if _wants_group_export(argv):
+        group_export(argv)
         return
 
     parser = argparse.ArgumentParser(
@@ -1844,6 +2116,7 @@ def main() -> None:
               "[--out DIR] [--no-threads] [--copy]\n"
               "       slack-export conversation_id [name ...] "
               "conversation_id [name ...] ... [--out DIR] [--no-threads]\n"
+              "       slack-export --group name [--out DIR] [--no-threads]\n"
               "       slack-export save conversation_id [nickname ...]\n"
               "       slack-export list [search ...]\n"
               "       slack-export list --groups [group ...] [--search word ...]\n"
@@ -1905,10 +2178,11 @@ def main() -> None:
     jobs = []
     for conversation_id, typed in targets:
         stem = safe_stem(typed) or conversation_id
+        md_path, txt_path = out_dir / f"{stem}.md", out_dir / f"{stem}.txt"
         jobs.append({"conversation_id": conversation_id, "typed": typed,
                      "stem": stem, "raw_path": RAW_DIR / f"{stem}.raw.json",
-                     "md_path": out_dir / f"{stem}.md",
-                     "txt_path": out_dir / f"{stem}.txt"})
+                     "md_path": md_path, "txt_path": txt_path,
+                     "outputs": [(md_path, txt_path)]})
 
     # Two conversations under one name would share one set of files: the second
     # would overwrite the first's archive and be refused by its transcripts. Names

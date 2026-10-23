@@ -37,6 +37,7 @@ class UnreadableArchive(Exception):
     def __init__(self, path: Path, reason: str):
         super().__init__(f"{path} is unreadable ({reason})")
         self.path = path
+        self.reason = reason
 
 
 def _folder_key(folder: Path):

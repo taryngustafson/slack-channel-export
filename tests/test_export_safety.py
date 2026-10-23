@@ -682,8 +682,8 @@ class SeveralConversationsTests(TempDirTest):
             "failed", {"ok": False, "error": "channel_not_found"})
         job = {"conversation_id": "C0123456789", "stem": "C0123456789",
                "archive": None, "raw_path": self.tmp / "raw" / "C0123456789.raw.json",
-               "md_path": self.tmp / "C0123456789.md",
-               "txt_path": self.tmp / "C0123456789.txt", "typed": ""}
+               "outputs": [(self.tmp / "C0123456789.md",
+                            self.tmp / "C0123456789.txt")], "typed": ""}
         with redirect_stdout(io.StringIO()), \
                 self.assertRaises(ec.ExportFailed) as caught:
             ec.export_one(client, job, mock.Mock(), [], {"url": "x"}, 1, 2)

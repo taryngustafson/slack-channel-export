@@ -402,7 +402,7 @@ The nickname column shows:
 
 The Slack channel name column shows the name Slack gives the conversation. DMs do not have Slack channel names, so a DM shows `(DM)`. A group DM technically has an internal Slack name beginning with `mpdm-`, but that is not very useful to a person, so it also shows as `(DM)` unless someone has given the group DM a name. A normal Slack channel whose actual name starts with `mpdm-` is still shown normally.
 
-The last-exported column shows how long ago the conversation was most recently exported, under any file name. An export counts only when its archive and both readable files were brought up to date. If a file was skipped because the exporter did not recognize it, the column keeps its previous time, and the export's summary says so. The wording runs: `just now`, then minutes, hours, days (up to 13), weeks (up to 8), months, and years. A `-` means it has never been exported, only saved or added to a group.
+The last-exported column shows how long ago the conversation was most recently exported, under any file name. An export counts only when its archive and both readable files were brought up to date. If a file was skipped because the exporter did not recognize it, the column keeps its previous time, and the export's summary says so. It covers the files that export set out to update. A conversation with copies in more than one folder can have copies further behind, for example after `--group NAME --out DIR` updated only `DIR`. The wording runs: `just now`, then minutes, hours, days (up to 13), weeks (up to 8), months, and years. A `-` means it has never been exported, only saved or added to a group.
 
 This is when *you* last ran an export, not whether Slack has new messages since. A quiet channel exported a month ago shows `1 month ago` even if nothing has been posted. The exact date and time of each export is kept in the conversation index; only the wording here is rounded.
 
@@ -718,6 +718,63 @@ Plain `slack-export list planning` still searches your whole conversation index 
 
 Browsing groups is completely local. It reads only the conversation index and never contacts Slack or reads your Slack token.
 
+### Export a whole group
+
+```sh
+slack-export --group Research
+```
+
+This exports every conversation in the group, one after another. Put a group name with spaces in quotes: `--group "Lab Notes"`.
+
+Each conversation's existing exports are found and topped up where they are, under the names they already have:
+
+- An export you made with `--out ~/Desktop` is updated on the Desktop.
+- A conversation exported more than once, under different names or into different folders, has every copy updated. Nothing is renamed, moved, merged or deleted.
+- A conversation with no export left (never exported, or every earlier copy was moved or deleted) gets a new one in `exports/`, named by its ID, as `slack-export C0123456789` would.
+
+Before anything is fetched, the exporter prints where each conversation will go:
+
+```text
+===============================================================
+ GROUP Research: 3 conversations
+===============================================================
+  each place is a .md and .txt pair
+  C0123456789  project-planning   (2 copies, each updated)
+      -> exports/Project-Planning
+      -> ~/Desktop/Project-Planning
+  D0123456789  Alex
+      -> exports/Alex
+  D0987654321
+      -> exports/D0987654321   (new: never exported before)
+```
+
+Each conversation then gets a few lines of progress, and the summary at the end lists what was written and what failed:
+
+```text
+===============================================================
+ DONE: 2 of 3 conversations exported (group Research)
+===============================================================
+  C0123456789  exports/Project-Planning.md
+               ~/Desktop/Project-Planning.md
+  D0123456789  exports/Alex.md
+  D0987654321  FAILED: conversations.info failed: channel_not_found
+```
+
+If one conversation fails, the rest are still exported, and the command ends with an error so a script can tell. These count as failures:
+
+- **Slack refuses it**, for example a channel you have left.
+- **It was saved from another Slack workspace** than the one your token is for. It is skipped without being fetched.
+- **A file is already where its new export would go**, and no export of this conversation wrote it. It is skipped, and the file is left alone.
+- **A write fails.** Run the same command again once that is fixed. It carries on from where it stopped, without repeating anything, as for a single export.
+
+Some problems stop the whole group before anything is fetched or written, because exporting could overwrite or mix conversations: two conversations in the group would be saved under one name, an archive in `exports/raw/` already holds a different conversation, an archive cannot be read, a file would land where git could commit it, or a temporary file is already in the way. The message says which.
+
+With `--out DIR`, only `DIR` is updated. Copies already in `DIR` are topped up, a conversation with none there gets a new one there named by its ID, and copies in other folders are left as they are. The list printed first says how many were left alone.
+
+`--no-threads` works as for a single export: the replies are fetched on the next run without it. `--copy` is refused with `--group`. One group per command, and `--group` cannot be combined with conversation IDs in the same command.
+
+A group with nothing in it says so and does nothing. A group name that does not exist is refused, with a hint when it differs from an existing group only in capitals.
+
 ## Options
 
 Most exports only need the basic command:
@@ -889,6 +946,18 @@ Each file is saved under a temporary name ending in `.partial` and then renamed.
 ### `could not write ...`
 
 A file could not be saved, usually because the disk is full or a folder's permissions changed. Fix that, then run the same command again. It carries on from where it stopped, without repeating anything (see [If an export is interrupted](#if-an-export-is-interrupted)). In an export of several conversations, the others still go ahead.
+
+### `two conversations in this group would share files`
+
+Two conversations in the group have exports under the same name, or names that differ only in capitals, so exporting both would mix them. Nothing was exported. That happens if an archive in `exports/raw/` was renamed by hand, or, on a disk that tells capitals apart (most Linux systems), if two conversations were exported separately as `Notes` and `notes`. Give one of them another name, or move its archive aside.
+
+### `already exists, but no export of this conversation wrote it`
+
+A group export was about to make a new export, named by the conversation's ID, and found a file of that name already there. It is not one this conversation's exports have a record of, so it is left alone and that conversation is skipped. Move the file aside and run the group again.
+
+### `saved from another Slack workspace`
+
+The conversation was added to the group while your token was for a different Slack workspace. It is skipped. Export it with a token for that workspace, or remove it from the group.
 
 ### `conversation index: NOT updated - the export itself is fine`
 
