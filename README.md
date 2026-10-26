@@ -110,9 +110,9 @@ slack-export C0123456789 Project Planning
 This creates files such as:
 
 ```text
-Project-Planning.txt
-Project-Planning.md
-Project-Planning.raw.json
+exports/Project-Planning.txt
+exports/Project-Planning.md
+exports/raw/Project-Planning.raw.json
 ```
 
 If you do not provide a name, the conversation ID is used instead.
@@ -200,6 +200,8 @@ slack-export list --groups Research
 
 `slack-export group Research --remove C0123456789` takes a conversation out of a group, and `slack-export group Research --delete` deletes the group. Neither removes anything from your conversation index.
 
+### Export a whole group
+
 To export every conversation in a group, or bring all their exports up to date:
 
 ```sh
@@ -265,6 +267,8 @@ The exporter checks the existing raw archive, downloads what has appeared since 
 
 With `--copy`, only the newly fetched messages are copied.
 
+To bring every conversation in a group up to date, run `slack-export --group NAME` again.
+
 If an export is interrupted partway, run the same command again. It finishes the update without adding anything twice.
 
 The existing exported text is not rewritten. If an older Slack message has since been edited, your previous export keeps the version that was captured at the time.
@@ -282,7 +286,7 @@ Slack exports can contain private conversations, so the project includes several
 * `exports/` is ignored by Git, and the conversation index is kept outside the project folder
 * if generated files or the conversation index are inside a Git repository, the exporter refuses to write them if Git could track them, including the temporary `.partial` files they are saved through
 * temporary files are created fresh every time, never written through an existing file or link
-* the tool reads only the conversations you explicitly provide
+* the tool reads only the conversations you name, on the command line or in a group you made
 * attachments are exported as links rather than downloaded
 
 The full permission model is explained in **[SLACK-SETUP.md](SLACK-SETUP.md)** and is also visible directly in `slack-export-app-manifest.yaml`.

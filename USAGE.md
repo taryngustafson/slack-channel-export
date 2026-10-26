@@ -100,9 +100,9 @@ slack-export C0123456789 Project Planning
 This creates files such as:
 
 ```text
-Project-Planning.txt
-Project-Planning.md
-Project-Planning.raw.json
+exports/Project-Planning.txt
+exports/Project-Planning.md
+exports/raw/Project-Planning.raw.json
 ```
 
 Spaces and punctuation are converted to hyphens so the name works safely as a filename. When that changes what you typed, the summary at the end says so:
@@ -146,6 +146,8 @@ If Slack refuses one of them (a mistyped ID, or a channel you are not in), that 
 ```
 
 `--out` and `--no-threads` apply to all of them. `--copy` works with one conversation at a time.
+
+To export conversations you have collected in a group, see [Export a whole group](#export-a-whole-group).
 
 ## Where the files go
 
@@ -266,6 +268,8 @@ slack-export C0123456789 Project Planning --out ~/Desktop
 
 Changing the name or `--out` location creates a separate export instead.
 
+To update every conversation in a group at once, wherever each one's files are, see [Export a whole group](#export-a-whole-group).
+
 ### Old thread replies
 
 Sometimes a new reply is added to a thread whose original message is far up the existing transcript.
@@ -312,7 +316,7 @@ After an export, the last lines show whether the conversation index was updated:
   conversation index: C0123456789  [Project-Planning]  project-planning
 ```
 
-If the conversation index cannot be updated, the export itself is still complete. The command tells you what went wrong separately.
+If the conversation index cannot be updated, the export itself is still complete. The command tells you what went wrong separately. A group export mentions the conversation index only when it could not be updated.
 
 ### See what is saved
 
@@ -402,7 +406,7 @@ The nickname column shows:
 
 The Slack channel name column shows the name Slack gives the conversation. DMs do not have Slack channel names, so a DM shows `(DM)`. A group DM technically has an internal Slack name beginning with `mpdm-`, but that is not very useful to a person, so it also shows as `(DM)` unless someone has given the group DM a name. A normal Slack channel whose actual name starts with `mpdm-` is still shown normally.
 
-The last-exported column shows how long ago the conversation was most recently exported, under any file name. An export counts only when its archive and both readable files were brought up to date. If a file was skipped because the exporter did not recognize it, the column keeps its previous time, and the export's summary says so. It covers the files that export set out to update. A conversation with copies in more than one folder can have copies further behind, for example after `--group NAME --out DIR` updated only `DIR`. The wording runs: `just now`, then minutes, hours, days (up to 13), weeks (up to 8), months, and years. A `-` means it has never been exported, only saved or added to a group.
+The last-exported column shows how long ago the conversation was most recently exported, under any file name. An export counts only when its archive and every readable file it set out to update were brought up to date. If a file was skipped because the exporter did not recognize it, the column keeps its previous time, and the export's summary says so. For a conversation with copies in more than one folder, the column says nothing about copies that export did not touch: after `--group NAME --out DIR`, for example, copies outside `DIR` may be further behind. The wording runs: `just now`, then minutes, hours, days (up to 13), weeks (up to 8), months, and years. A `-` means it has never been exported, only saved or added to a group.
 
 This is when *you* last ran an export, not whether Slack has new messages since. A quiet channel exported a month ago shows `1 month ago` even if nothing has been posted. The exact date and time of each export is kept in the conversation index; only the wording here is rounded.
 
@@ -498,7 +502,7 @@ The conversation index normally lives outside the `slack-channel-export` project
 
 ## Group conversations
 
-A group is your own named collection of conversations — for example, everything related to one project. Groups are optional: a conversation can be in any number of groups, or none.
+A group is your own named collection of conversations — for example, everything related to one project. Groups are optional: a conversation can be in any number of groups, or none. Once you have a group, you can export every conversation in it with one command (see [Export a whole group](#export-a-whole-group)).
 
 ### Make a group
 
@@ -809,6 +813,8 @@ Before anything is downloaded, the exporter also checks whether the destination 
 
 This is intended to prevent private Slack conversations from being committed accidentally.
 
+With `--group`, `--out` works a little differently: only copies already in that folder are updated, and copies elsewhere are left alone. See [Export a whole group](#export-a-whole-group).
+
 ### Copy to the clipboard
 
 ```sh
@@ -822,6 +828,8 @@ You can combine this with a name:
 ```sh
 slack-export C0123456789 Project Planning --copy
 ```
+
+`--copy` works with one conversation at a time. It is refused when you export several conversations or a group.
 
 `--no-clipboard`, from earlier versions where copying was automatic, is still accepted and does nothing extra.
 
@@ -945,7 +953,7 @@ Each file is saved under a temporary name ending in `.partial` and then renamed.
 
 ### `could not write ...`
 
-A file could not be saved, usually because the disk is full or a folder's permissions changed. Fix that, then run the same command again. It carries on from where it stopped, without repeating anything (see [If an export is interrupted](#if-an-export-is-interrupted)). In an export of several conversations, the others still go ahead.
+A file could not be saved, usually because the disk is full or a folder's permissions changed. Fix that, then run the same command again. It carries on from where it stopped, without repeating anything (see [If an export is interrupted](#if-an-export-is-interrupted)). In an export of several conversations or a group, the others still go ahead.
 
 ### `two conversations in this group would share files`
 
@@ -989,7 +997,7 @@ Something after the group's name is not a conversation ID or Slack link. Most of
 
 ### `No group named '...'`
 
-`slack-export list --groups`, `group --remove` or `group --delete` was given a name that is not one of your groups. Group names are exact, including capitalization; if one differs only in capitalization, the message suggests it. `slack-export list --groups` on its own lists every group you have.
+`slack-export --group`, `list --groups`, `group --list`, `group --remove` or `group --delete` was given a name that is not one of your groups. Group names are exact, including capitalization; if one differs only in capitalization, the message suggests it. `slack-export list --groups` on its own lists every group you have.
 
 ### `the nickname '...' is already used by`
 
@@ -999,7 +1007,7 @@ Within a workspace, each nickname can belong to only one conversation. The messa
 
 * The exporter is **read-only**.
 * It does not run in the background.
-* It reads only the conversation you explicitly provide.
+* It reads only the conversations you name, on the command line or in a group you made.
 * Attachments are exported as links rather than downloaded files.
 * Exported conversations can contain private information. Treat the resulting files accordingly.
 

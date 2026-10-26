@@ -18,7 +18,8 @@ someone edited last week keeps the wording it was archived with.
 
 Read-only by construction: it refuses to start if Slack reports any scope on the
 token beyond the read scopes it was built for, and it exports only the
-conversations named on the command line - it never enumerates the workspace.
+conversations named on the command line or in a group you made - it never
+enumerates the workspace.
 
     slack-export C0123456789
     slack-export C0123456789 Project Planning   # name the output file
@@ -53,6 +54,12 @@ Slack and added to it first:
     slack-export list --groups                      # your groups, with their sizes
     slack-export list --groups Research             # the conversations in one
     slack-export list --groups Research --search planning   # ...searched
+
+A whole group can be exported in one command. Each conversation's existing files
+are topped up where they are; one with none yet gets new files named by its ID:
+
+    slack-export --group Research                   # every conversation in it
+    slack-export --group Research --out ~/Desktop   # ...writing only to the Desktop
 """
 
 import argparse
@@ -1317,7 +1324,9 @@ def group_command(argv) -> None:
             "--sort-by and --reverse choose the order, as they do for "
             "`slack-export list`.",
             "Group names are exact: 'Research' and 'research' are two groups. "
-            "Put a name with spaces in quotes.")),
+            "Put a name with spaces in quotes.",
+            "To export every conversation in a group, use "
+            "`slack-export --group name`.")),
         formatter_class=_HelpFormatter)
     # Optional only so that `group --list` can list every group; everything
     # else still needs it, checked below.

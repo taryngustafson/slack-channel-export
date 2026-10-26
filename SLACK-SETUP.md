@@ -234,7 +234,7 @@ With the permissions requested by the manifest, the token can read:
 * your group DMs
 * thread replies in those conversations
 
-The exporter itself reads only the conversation you explicitly provide when you run the command.
+The exporter itself reads only the conversations you name when you run the command, either directly or as a group you made.
 
 There is no "export the entire workspace" command.
 
@@ -298,9 +298,9 @@ The token is not stored:
 
 It is read from macOS Keychain when the tool runs.
 
-### The exporter reads one conversation at a time
+### The exporter reads only the conversations you choose
 
-Although the user token may be capable of reading many conversations available to your Slack account, the program fetches only the conversation you explicitly provide.
+Although the user token may be capable of reading many conversations available to your Slack account, the program fetches only the conversations you name on the command line, or that you put in a group yourself. It reads them one at a time.
 
 It does not enumerate the workspace and does not run automatically.
 
