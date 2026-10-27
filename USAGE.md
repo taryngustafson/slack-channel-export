@@ -1007,6 +1007,7 @@ Within a workspace, each nickname can belong to only one conversation. The messa
 
 * The exporter is **read-only**.
 * It does not run in the background.
+* You can run it in several terminals at once. They take turns updating the conversation index, so no run's changes are lost; one that has to wait more than a moment says `Waiting for another slack-export...`. Don't export the same conversation in two terminals at the same time.
 * It reads only the conversations you name, on the command line or in a group you made.
 * Attachments are exported as links rather than downloaded files.
 * Exported conversations can contain private information. Treat the resulting files accordingly.

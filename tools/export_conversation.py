@@ -63,6 +63,7 @@ are topped up where they are; one with none yet gets new files named by its ID:
 """
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -70,6 +71,8 @@ import re
 import subprocess
 import sys
 import textwrap
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -119,6 +122,11 @@ PRIVATE_DIR = 0o700
 # project, so git never sees it; save_directory still checks, for the people who
 # keep ~/.config itself in a dotfiles repository.
 DIRECTORY_PATH = Path.home() / ".config" / "slack-export" / "channels.json"
+# How long a run waits for another slack-export to finish changing the index, and
+# when it says it is waiting. Each change holds the lock for milliseconds, since
+# nothing slow - Slack least of all - happens while it is held.
+INDEX_LOCK_WAIT_SECONDS = 30
+INDEX_LOCK_NOTICE_SECONDS = 2
 
 
 def keychain_token(service: str = "SLACK_USER_TOKEN") -> str:
@@ -462,6 +470,56 @@ def save_directory(data: dict, path: Path = None) -> None:
     write_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
+@contextmanager
+def directory_lock(path: Path = None):
+    """Hold the conversation index while it is read, changed and written back.
+
+    Without it, two runs that change the index at the same moment - two exports
+    finishing together, or an export finishing while `group` adds members - each
+    write back their own copy and one of the changes is lost. So every change
+    re-reads the index inside this lock and saves before leaving it. Reading
+    alone needs no lock: save_directory replaces the file whole, so a reader sees
+    the old index or the new one, never half of each.
+
+    The lock is fcntl.flock on the folder that holds the index, not on a lock
+    file: the index itself is replaced on every save, so a lock on it would be
+    lost, and a lock file would be one more thing beside the index for git to
+    see. The operating system releases the lock when the process holding it ends,
+    however it ends, so a crashed or killed run never leaves one behind. A run
+    that finds the index busy waits, says so after INDEX_LOCK_NOTICE_SECONDS, and
+    gives up after INDEX_LOCK_WAIT_SECONDS with nothing changed.
+    """
+    path = path or DIRECTORY_PATH
+    make_private_dir(path.parent)
+    try:
+        fd = os.open(path.parent, os.O_RDONLY)
+    except OSError as exc:
+        sys.exit(f"FATAL: cannot open {display_path(path.parent)} to lock the "
+                 f"conversation index ({exc.strerror}).")
+    try:
+        started, told = time.monotonic(), False
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                waited = time.monotonic() - started
+                if waited >= INDEX_LOCK_WAIT_SECONDS:
+                    sys.exit(f"FATAL: another slack-export has been changing the "
+                             f"conversation index for\n"
+                             f"       {INDEX_LOCK_WAIT_SECONDS} seconds. Nothing was "
+                             f"changed. Run the same command again once it\n"
+                             f"       has finished.")
+                if not told and waited >= INDEX_LOCK_NOTICE_SECONDS:
+                    print("Waiting for another slack-export to finish changing the "
+                          "conversation index...", file=sys.stderr, flush=True)
+                    told = True
+                time.sleep(0.05)
+        yield
+    finally:
+        os.close(fd)     # also releases the lock
+
+
 def record_in_directory(auth: dict, info: dict, conversation_id: str, stem: str,
                         when_utc: str, path: Path = None,
                         complete: bool = True) -> str:
@@ -479,16 +537,17 @@ def record_in_directory(auth: dict, info: dict, conversation_id: str, stem: str,
     SystemExit that load_directory and save_directory use to stop `save` and `list`.
     """
     try:
-        store = load_directory(path)
-        team_id, team_name = auth["team_id"], auth["team"]
-        channel_directory.set_slack_name(store, team_id, team_name, conversation_id,
-                                         info.get("name") or "")
-        channel_directory.set_kind(store, team_id, team_name, conversation_id,
-                                   channel_directory.kind_of(info))
-        if complete:
-            channel_directory.record_export(store, team_id, team_name,
-                                            conversation_id, stem, when_utc)
-        save_directory(store, path)
+        with directory_lock(path):
+            store = load_directory(path)
+            team_id, team_name = auth["team_id"], auth["team"]
+            channel_directory.set_slack_name(store, team_id, team_name,
+                                             conversation_id, info.get("name") or "")
+            channel_directory.set_kind(store, team_id, team_name, conversation_id,
+                                       channel_directory.kind_of(info))
+            if complete:
+                channel_directory.record_export(store, team_id, team_name,
+                                                conversation_id, stem, when_utc)
+            save_directory(store, path)
     except (SystemExit, OSError) as exc:
         reason = str(exc.code if isinstance(exc, SystemExit) else exc)
         return (f"NOT updated - the export itself is fine.\n"
@@ -1100,20 +1159,24 @@ def save_command(argv) -> None:
         sys.exit(f"FATAL: Slack could not find {conversation_id} ({error}).{hint}")
 
     kind = channel_directory.kind_of(info)
-    if nickname:
-        try:
-            outcome = channel_directory.set_nickname(store, team_id, team_name,
-                                                     conversation_id, nickname)
-        except channel_directory.NicknameTaken as exc:
-            owner = exc.owner.get("slack_name") or "no Slack channel name"
-            sys.exit(f"FATAL: the nickname '{nickname}' is already used by "
-                     f"{exc.owner_id} ({owner}).\n"
-                     f"       Pick another, or give that one a different "
-                     f"nickname first.")
-    channel_directory.set_slack_name(store, team_id, team_name, conversation_id,
-                                     info.get("name") or "")
-    channel_directory.set_kind(store, team_id, team_name, conversation_id, kind)
-    save_directory(store)
+    # Read again under the lock: another run may have changed the index while
+    # Slack was answering, and saving the copy read above would undo that.
+    with directory_lock():
+        store = load_directory()
+        if nickname:
+            try:
+                outcome = channel_directory.set_nickname(store, team_id, team_name,
+                                                         conversation_id, nickname)
+            except channel_directory.NicknameTaken as exc:
+                owner = exc.owner.get("slack_name") or "no Slack channel name"
+                sys.exit(f"FATAL: the nickname '{nickname}' is already used by "
+                         f"{exc.owner_id} ({owner}).\n"
+                         f"       Pick another, or give that one a different "
+                         f"nickname first.")
+        channel_directory.set_slack_name(store, team_id, team_name, conversation_id,
+                                         info.get("name") or "")
+        channel_directory.set_kind(store, team_id, team_name, conversation_id, kind)
+        save_directory(store)
 
     row = next(r for r in channel_directory.search(store, conversation_id)
                if r["team_id"] == team_id and r["channel_id"] == conversation_id)
@@ -1136,26 +1199,30 @@ def _count(n: int) -> str:
     return f"{n} conversation" + ("" if n == 1 else "s")
 
 
-def _index_from_slack(store: dict, client, auth: dict, conversation_id: str):
-    """Look `conversation_id` up in Slack and add it to the conversation index, as
-    `save` does but with no nickname. Returns None, or why it could not be added.
+def _look_up_in_slack(client, conversation_id: str):
+    """Ask Slack about a conversation `group` is adding that the index does not
+    know yet. Returns (info, None), or (None, why it could not be added).
 
     Slack's "not found" also covers a conversation this token simply cannot see,
     so it is never reported as proof that the ID is wrong.
     """
     try:
-        info = client.conversations_info(channel=conversation_id)["channel"]
+        return client.conversations_info(channel=conversation_id)["channel"], None
     except SlackApiError as exc:
         error = exc.response["error"]
         if error == "channel_not_found":
-            return "conversation not found or not accessible"
-        return f"Slack could not look it up ({error})"
+            return None, "conversation not found or not accessible"
+        return None, f"Slack could not look it up ({error})"
+
+
+def _index_from_slack(store: dict, auth: dict, conversation_id: str, info: dict):
+    """Add a conversation Slack described to the index, as `save` does but with
+    no nickname."""
     team_id, team_name = auth["team_id"], auth["team"]
     channel_directory.set_slack_name(store, team_id, team_name, conversation_id,
                                      info.get("name") or "")
     channel_directory.set_kind(store, team_id, team_name, conversation_id,
                                channel_directory.kind_of(info))
-    return None
 
 
 def _remove_from_group(store: dict, name: str, raw_ids: list) -> None:
@@ -1408,22 +1475,31 @@ def group_command(argv) -> None:
         if args.list:
             # One code path with `list --groups NAME`, so the two cannot drift.
             _list_groups(store, [name], None, args.sort_by, args.reverse)
-        elif args.delete:
-            size = channel_directory.delete_group(store, name)
-            save_directory(store)
-            print(f"Deleted group {name}" + (f" ({_count(size)})." if size else ".")
-                  + "\nIts conversations are still in your conversation index.")
-        else:
-            _remove_from_group(store, name, args.conversations)
+            return
+        # Every change below reads the index again under the lock, so it starts
+        # from whatever another run may have saved since the read above.
+        with directory_lock():
+            store = load_directory()
+            if name not in store.get("groups", {}):
+                sys.exit(_no_such_group(store, name))
+            if args.delete:
+                size = channel_directory.delete_group(store, name)
+                save_directory(store)
+                print(f"Deleted group {name}" + (f" ({_count(size)})." if size else ".")
+                      + "\nIts conversations are still in your conversation index.")
+            else:
+                _remove_from_group(store, name, args.conversations)
         return
 
     if not args.conversations:
-        if channel_directory.create_group(store, name) == "exists":
-            size = len(store["groups"][name])
-            print(f"Group {name} already exists ({_count(size)}). "
-                  f"Nothing was changed.")
-            return
-        save_directory(store)
+        with directory_lock():
+            store = load_directory()
+            if channel_directory.create_group(store, name) == "exists":
+                size = len(store["groups"][name])
+                print(f"Group {name} already exists ({_count(size)}). "
+                      f"Nothing was changed.")
+                return
+            save_directory(store)
         print(f"Created group {name} (empty).")
         return
 
@@ -1431,37 +1507,53 @@ def group_command(argv) -> None:
     # once, in the order first typed.
     wanted = list(dict.fromkeys(parse_conversation_id(raw)
                                 for raw in args.conversations))
-    # Slack is contacted only if something is missing from the index, and then
-    # once, before anything changes: a missing or over-scoped token stops the run
-    # with nothing written.
-    client = auth = None
-    if any(not channel_directory.saved_in(store, cid) for cid in wanted):
+    # Slack is contacted only for what is missing from the index, before anything
+    # changes: a missing or over-scoped token stops the run with nothing written.
+    # It is asked before the lock is taken, so a slow answer never holds up an
+    # export that is finishing in another terminal.
+    auth, looked_up = None, {}
+    missing = [cid for cid in wanted if not channel_directory.saved_in(store, cid)]
+    if missing:
         client = connect()
         _, auth = assert_read_only(client, quiet=True)
+        looked_up = {cid: _look_up_in_slack(client, cid) for cid in missing}
 
     added, already, failed = [], [], []
-    for conversation_id in wanted:
-        teams = channel_directory.saved_in(store, conversation_id)
-        if not teams:
-            reason = _index_from_slack(store, client, auth, conversation_id)
-            if reason:
-                failed.append((conversation_id, reason))
+    with directory_lock():
+        store = load_directory()
+        # Adding makes a group that does not exist yet, so a group deleted in
+        # another terminal while Slack was answering would quietly come back.
+        if existed and name not in store.get("groups", {}):
+            sys.exit(f"Group {name} was deleted while this command was running, so "
+                     f"nothing was added.\nRun the same command again to make it "
+                     f"anew with these conversations.")
+        for conversation_id in wanted:
+            teams = channel_directory.saved_in(store, conversation_id)
+            if not teams:
+                info, reason = looked_up.get(
+                    conversation_id,
+                    (None, "taken out of the conversation index while this ran"))
+                if reason:
+                    failed.append((conversation_id, reason))
+                    continue
+                _index_from_slack(store, auth, conversation_id, info)
+                teams = [auth["team_id"]]
+            if len(teams) > 1:
+                failed.append((conversation_id,
+                               "in the conversation index for more than one "
+                               "workspace (not supported yet)"))
                 continue
-            teams = [auth["team_id"]]
-        if len(teams) > 1:
-            failed.append((conversation_id,
-                           "in the conversation index for more than one "
-                           "workspace (not supported yet)"))
-            continue
-        outcome = channel_directory.add_to_group(store, name, teams[0],
-                                                 conversation_id)
-        row = next(r for r in channel_directory.search(store, conversation_id)
-                   if r["team_id"] == teams[0] and r["channel_id"] == conversation_id)
-        (added if outcome == "added" else already).append(row)
-    # One write, so a conversation new to the index and its place in the group are
-    # saved together or not at all. Nothing is indexed without also being added.
-    if added:
-        save_directory(store)
+            outcome = channel_directory.add_to_group(store, name, teams[0],
+                                                     conversation_id)
+            row = next(r for r in channel_directory.search(store, conversation_id)
+                       if r["team_id"] == teams[0]
+                       and r["channel_id"] == conversation_id)
+            (added if outcome == "added" else already).append(row)
+        # One write, so a conversation new to the index and its place in the group
+        # are saved together or not at all. Nothing is indexed without also being
+        # added.
+        if added:
+            save_directory(store)
 
     # Sections by outcome; added and already-in rows share one set of columns.
     lines = channel_directory.format_rows(added + already)
