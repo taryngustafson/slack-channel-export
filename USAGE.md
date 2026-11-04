@@ -843,6 +843,46 @@ This exports only top-level messages.
 
 It is faster, but any conversation inside threads will be missing. Run the same export later without `--no-threads` and the replies it skipped are downloaded and added to your files.
 
+## Tab completion
+
+Press Tab partway through a word to finish it, as you would with `cd`. When several things match, your shell lists them; in bash, press Tab twice. Matching is case-sensitive, so `--group con` does not complete to `Contacts`.
+
+| After you type | Tab offers |
+|---|---|
+| `slack-export` | `list`, `save`, `group`, and the IDs in your conversation index |
+| a `-` | the options that command takes, such as `--group` or `--out` |
+| `--group`, `list --groups`, `group` | your group names |
+| `save`, or an ID to export | the IDs in your conversation index |
+| `group NAME` | the IDs in your conversation index that are not in that group yet |
+| `group NAME --remove` | the IDs in that group |
+| `--sort-by` | `name`, `id`, `nickname`, `export` |
+| `--out` | folders |
+
+Anywhere else, such as a file name, a nickname or a search word, Tab offers nothing, because any text could go there. Tab only reads your conversation index: it never contacts Slack or changes anything. A conversation's ID is offered once it is in the index, after you have exported it, saved it, or added it to a group.
+
+### How it is turned on
+
+`install.sh` writes the completion code to `.venv/slack-export-completion.sh` in the project folder, and adds one line to `~/.zshrc` that loads it in every new terminal tab:
+
+```sh
+[ -f "/Users/you/slack-channel-export/.venv/slack-export-completion.sh" ] && . "/Users/you/slack-channel-export/.venv/slack-export-completion.sh"  # added by slack-channel-export install.sh
+```
+
+The line does nothing if that file is gone, so deleting the project folder never makes a new terminal print an error. If zsh's own completion system is not on yet (a new Mac's `~/.zshrc` does not turn it on), the file turns it on, which also lets Tab complete other commands that support it.
+
+If you use bash, the installer does not edit your startup file. It prints the same line for you to add to `~/.bash_profile`.
+
+To turn tab completion off, delete that line from `~/.zshrc`, or run `sh install.sh --uninstall`, which also removes the `slack-export` command.
+
+### If Tab does not complete
+
+* **Open a new terminal tab.** The line in `~/.zshrc` only takes effect in tabs opened after installing.
+* **Installed before tab completion existed?** Run `sh install.sh` again from the project folder. It installs what tab completion needs and adds the line.
+* **The installer said `skipped: argcomplete is not installed`.** Installing the Python packages failed, usually for lack of an internet connection. Run `sh install.sh` again once you are online.
+* **An ID is not offered.** Only conversations in your conversation index are offered. Export or save the conversation once, and its ID will be offered from then on.
+
+`slack-export` itself works the same with or without tab completion.
+
 ## Re-render an existing raw export
 
 If you already have a `.raw.json` archive and want to create the text version again:
@@ -998,6 +1038,10 @@ Something after the group's name is not a conversation ID or Slack link. Most of
 ### `No group named '...'`
 
 `slack-export --group`, `list --groups`, `group --list`, `group --remove` or `group --delete` was given a name that is not one of your groups. Group names are exact, including capitalization; if one differs only in capitalization, the message suggests it. `slack-export list --groups` on its own lists every group you have.
+
+### `another slack-export has been changing the conversation index for 30 seconds`
+
+Another `slack-export` running at the same time held the conversation index for 30 seconds, so this one gave up and changed nothing. Normally each run holds it for only a moment, so check whether another terminal has a `slack-export` that is stuck or paused. Once it has finished, run your command again. If it was an export, the export itself still finished; only the conversation index was not updated.
 
 ### `the nickname '...' is already used by`
 

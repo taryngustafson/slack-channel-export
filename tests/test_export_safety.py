@@ -820,6 +820,49 @@ class InstallScriptTests(TempDirTest):
         self.assertNotIn("export PATH", zshrc.read_text())
         self.assertIn("# existing content", zshrc.read_text())
 
+    def with_argcomplete(self):
+        """Give the fake .venv argcomplete's script, which writes the shell code."""
+        fake_bin(self.project / ".venv" / "bin", "register-python-argcomplete",
+                 'echo "# shell code for $1"\n')
+        return self.project / ".venv" / "slack-export-completion.sh"
+
+    def test_turns_on_tab_completion_once(self):
+        completion = self.with_argcomplete()
+        zshrc = self.home / ".zshrc"
+        zshrc.write_text("# existing content\n")
+        result = self.install("--to", str(self.bin_dir))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("5. Turning on tab completion", result.stdout)
+        text = completion.read_text()
+        self.assertIn("compinit -i", text)
+        self.assertTrue(text.endswith("# shell code for slack-export\n"))
+        load = f'[ -f "{completion}" ] && . "{completion}"'
+        self.assertIn(load, zshrc.read_text())
+        self.assertIn("# existing content", zshrc.read_text())
+        # Again: the file is rewritten, but the line is not added twice.
+        result = self.install("--to", str(self.bin_dir))
+        self.assertIn("already turned on", result.stdout)
+        self.assertEqual(zshrc.read_text().count(load), 1)
+
+    def test_tab_completion_is_skipped_without_argcomplete(self):
+        zshrc = self.home / ".zshrc"
+        zshrc.write_text("# existing content\n")
+        result = self.install("--to", str(self.bin_dir), path=f"{self.bin_dir}:/usr/bin:/bin")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("skipped: argcomplete is not installed", result.stdout)
+        self.assertEqual(zshrc.read_text(), "# existing content\n")
+        self.assertFalse((self.project / ".venv" / "slack-export-completion.sh").exists())
+
+    def test_uninstall_removes_the_tab_completion_line(self):
+        self.with_argcomplete()
+        zshrc = self.home / ".zshrc"
+        zshrc.write_text("# existing content\n")
+        self.install("--to", str(self.bin_dir), path="/usr/bin:/bin")
+        self.install("--to", str(self.bin_dir), "--uninstall")
+        self.assertNotIn("slack-export-completion.sh", zshrc.read_text())
+        self.assertNotIn("export PATH", zshrc.read_text())
+        self.assertIn("# existing content", zshrc.read_text())
+
     def test_uninstall_leaves_another_project_alone(self):
         self.bin_dir.mkdir()
         someone_else = self.tmp / "someone-elses-slack-export"

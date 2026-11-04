@@ -2283,6 +2283,16 @@ def _export_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    # A Tab press: the shell runs slack-export with the line typed so far in the
+    # environment. Answered before anything else, and never falls through to a
+    # real run: without argcomplete installed, it just completes nothing.
+    if "_ARGCOMPLETE" in os.environ:
+        try:
+            import completion
+        except ImportError:
+            sys.exit(1)
+        completion.complete(sys.modules[__name__])
+        sys.exit(1)     # complete() exits itself; this is only a backstop
     argv = sys.argv[1:]
     if argv and argv[0] in COMMANDS:
         COMMANDS[argv[0]](argv[1:])

@@ -58,7 +58,7 @@ cd ~/slack-channel-export
 sh install.sh
 ```
 
-The installer creates the tool's Python environment and makes the `slack-export` command available from any folder.
+The installer creates the tool's Python environment, makes the `slack-export` command available from any folder, and turns on [tab completion](#tab-completion) for it.
 
 If it tells you to open a new terminal tab, do that before continuing.
 
@@ -212,6 +212,20 @@ Each existing export is topped up where it is, under its own name, including one
 
 For more about the conversation index, groups, re-running existing exports, and other options, see **[USAGE.md](USAGE.md)**.
 
+### Tab completion
+
+Press Tab partway through a word to finish it, as you would with `cd`:
+
+```text
+slack-export g             →  slack-export group
+slack-export group --li    →  slack-export group --list
+slack-export --group Con   →  slack-export --group Contacts
+```
+
+Tab completes command words, options, your group names, the conversation IDs in your conversation index, and folders after `--out`. Matching is case-sensitive. When several things match, your shell lists them; in bash, press Tab twice.
+
+`install.sh` turns this on for zsh, the Mac's default shell, by adding one line to `~/.zshrc`. Open a new terminal tab afterwards. If you use bash, the installer prints the line to add to `~/.bash_profile` instead. Installed before tab completion existed? Run `sh install.sh` again. `slack-export` works the same without it. See [Tab completion](USAGE.md#tab-completion) in USAGE.md for details.
+
 ## What gets saved
 
 Each export has three parts:
@@ -300,11 +314,12 @@ It uses:
 * macOS Keychain via `security`
 * `pbcopy` for clipboard output
 * Python and `slack_sdk` for Slack API access
+* `argcomplete` for tab completion in zsh and bash
 
 ## Documentation
 
 * **[SLACK-SETUP.md](SLACK-SETUP.md)** — one-time Slack app and token setup
-* **[USAGE.md](USAGE.md)** — detailed day-to-day usage, options, incremental updates, the conversation index, groups, and troubleshooting
+* **[USAGE.md](USAGE.md)** — detailed day-to-day usage, options, tab completion, incremental updates, the conversation index, groups, and troubleshooting
 
 ## License
 

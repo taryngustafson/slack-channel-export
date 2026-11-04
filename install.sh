@@ -1,10 +1,12 @@
 #!/bin/sh
-# Install slack-channel-export: set up its Python environment, then put a
-# `slack-export` command on your PATH so it runs from any folder.
+# Install slack-channel-export: set up its Python environment, put a
+# `slack-export` command on your PATH so it runs from any folder, and turn on
+# tab completion for it.
 #
 #   sh install.sh              install
 #   sh install.sh --to DIR     install the command into DIR instead
-#   sh install.sh --uninstall  remove the command (your exports are kept)
+#   sh install.sh --uninstall  remove the command and its ~/.zshrc lines
+#                              (your exports are kept)
 #   sh install.sh --help
 #
 # Safe to run again: it repeats only the steps that are not already done.
@@ -35,7 +37,7 @@ while [ $# -gt 0 ]; do
               TARGET=$1 ;;
         --uninstall) ACTION=uninstall ;;
         -h|--help)
-            sed -n '2,10p' "$SELF" | sed 's/^# \{0,1\}//'
+            sed -n '2,12p' "$SELF" | sed 's/^# \{0,1\}//'
             exit 0 ;;
         *) echo "FATAL: unknown option '$1'. Try --help." >&2; exit 1 ;;
     esac
@@ -60,7 +62,7 @@ if [ "$ACTION" = uninstall ]; then
     if [ -f "$HOME/.zshrc" ] && grep -q "$MARKER" "$HOME/.zshrc"; then
         # Remove the PATH line this script added, and the marker above it.
         tmp=$(mktemp) && grep -v "$MARKER" "$HOME/.zshrc" > "$tmp" && mv "$tmp" "$HOME/.zshrc"
-        say "removed the PATH line from ~/.zshrc"
+        say "removed the lines it added to ~/.zshrc (PATH, tab completion)"
     fi
     say ""
     say "Your exports and this folder are untouched."
@@ -90,7 +92,7 @@ fi
     -r "$DIR/requirements.txt" || {
         say "   FATAL: could not install the dependency (needs an internet connection)."
         exit 1; }
-say "   dependency installed: $(sed -n 1p "$DIR/requirements.txt")"
+say "   installed: $(paste -sd ' ' "$DIR/requirements.txt")"
 
 # ── 3. where the command goes ────────────────────────────────────────────────
 say "3. Installing the '$COMMAND_NAME' command"
@@ -135,12 +137,57 @@ else
     say "4. $TARGET is already on your PATH"
 fi
 
+# ── 5. tab completion ────────────────────────────────────────────────────────
+# argcomplete (from requirements.txt) writes the shell code. It goes in a file
+# inside .venv rather than straight into ~/.zshrc, so it is rewritten on every
+# run, and the ~/.zshrc line loads it only while it exists: deleting this folder
+# can never make a new terminal print an error.
+say "5. Turning on tab completion"
+COMPLETION=$DIR/.venv/slack-export-completion.sh
+LOAD_LINE="[ -f \"$COMPLETION\" ] && . \"$COMPLETION\""
+write_completion() {
+    cat <<'EOF'
+# Tab completion for slack-export. Written by install.sh, which rewrites it
+# every time it runs, and loaded by a line it adds to ~/.zshrc.
+#
+# zsh's completion system must be running before the compdef below can
+# register slack-export. A new Mac's ~/.zshrc does not start it, so start it
+# here if nothing has yet; -i skips folders it finds unsafe instead of asking
+# about them every time a terminal opens.
+if [ -n "${ZSH_VERSION-}" ] && ! whence compdef >/dev/null 2>&1; then
+    autoload -Uz compinit && compinit -i
+fi
+EOF
+    "$DIR/.venv/bin/register-python-argcomplete" "$COMMAND_NAME"
+}
+if [ -x "$DIR/.venv/bin/register-python-argcomplete" ] &&
+        write_completion > "$COMPLETION" 2>/dev/null; then
+    if [ -f "$HOME/.zshrc" ] && grep -qF "$COMPLETION" "$HOME/.zshrc"; then
+        say "   already turned on in ~/.zshrc"
+    elif [ -w "$HOME/.zshrc" ] || [ ! -e "$HOME/.zshrc" ]; then
+        printf '\n%s  %s\n' "$LOAD_LINE" "$MARKER" >> "$HOME/.zshrc"
+        say "   added one line to ~/.zshrc (remove it, or run --uninstall, to undo)"
+        # Step 4 has already said so if it added a line too.
+        [ "$ON_PATH" = no ] || say "   OPEN A NEW TERMINAL TAB for it to take effect."
+    else
+        say "   Add this line to ~/.zshrc yourself:"
+        say "       $LOAD_LINE"
+    fi
+    say "   (Using bash rather than zsh? Add this line to ~/.bash_profile:"
+    say "       $LOAD_LINE )"
+else
+    rm -f "$COMPLETION"
+    say "   skipped: argcomplete is not installed in $DIR/.venv."
+    say "   slack-export works without it; only the Tab key will not complete."
+fi
+
 # ── done ─────────────────────────────────────────────────────────────────────
 say ""
 say "Installed."
 say ""
 say "  Next: store your Slack token, then check it. See SLACK-SETUP.md."
 say "  Then: $COMMAND_NAME C0123456789      (from any folder)"
+say "  Press Tab after $COMMAND_NAME to complete commands, flags, group names and IDs."
 say ""
 say "  Keep this folder - the command is a link to it, not a copy."
 say "  To undo:  sh \"$DIR/install.sh\" --uninstall"
