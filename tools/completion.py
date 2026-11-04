@@ -6,10 +6,12 @@ complete() before doing anything else, and argcomplete prints the candidates and
 exits. Nothing here writes a file, reads the Keychain or contacts Slack: the only
 thing read is the conversation index.
 
-Only what the tool accepts in that spot is offered (D78): the command words,
-flags, group names, folders for --out, and conversation IDs already in the
-conversation index. Nicknames and Slack names are never offered, since no
-command takes one where an ID goes. Matching is case-sensitive, as `cd` is.
+Only what the tool accepts in that spot is offered: the command words, flags,
+group names, folders for --out, conversation IDs already in the conversation
+index, and, as the first word of an export only, saved nicknames (the one place
+a nickname can stand in for an ID). Slack names are never offered. Matching is
+case-sensitive, as `cd` is. argcomplete quotes what it inserts, so a nickname
+with spaces arrives as one word.
 
 slack-export has no single parser: the first word picks one (see main()), so
 complete() does the same, then tells argcomplete to start reading one word later.
@@ -114,9 +116,22 @@ class _Index:
     def group_names(self, **_) -> list:
         return sorted(self._read().get("groups", {}))
 
+    def nicknames(self) -> list:
+        """Saved nicknames that `slack-export NICKNAME` can use: read from the
+        index on every Tab, so a renamed or removed one is gone at once. Every
+        workspace's, since which one the token is for is only known by asking
+        Slack, and Tab never does."""
+        usable = {entry["nickname"]
+                  for workspace in self._read()["workspaces"].values()
+                  for entry in workspace.get("channels", {}).values()
+                  if entry.get("nickname")
+                  and not self._tool.nickname_problem(entry["nickname"])}
+        return sorted(usable)
+
     def first_words(self, **_) -> list:
-        """The first word of a command line: a command, or the ID to export."""
-        return list(COMMAND_PARSERS) + self.ids()
+        """The first word of a command line: a command, or the conversation to
+        export, by ID or by nickname."""
+        return list(COMMAND_PARSERS) + self.ids() + self.nicknames()
 
     def _members(self, name) -> set:
         return {m["channel"] for m in self._read().get("groups", {}).get(name, [])}

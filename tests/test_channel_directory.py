@@ -112,12 +112,22 @@ class NameTests(unittest.TestCase):
     def test_a_nickname_already_used_elsewhere_is_refused_and_nothing_changes(self):
         self.nickname("Planning Team", channel=CHAN)
         before = json.dumps(self.store, sort_keys=True)
-        for clash in ("Planning Team", "planning-team", "  PLANNING team "):
+        for clash in ("Planning Team", "  Planning Team "):
             with self.subTest(clash=clash), \
                     self.assertRaises(cd.NicknameTaken) as caught:
                 self.nickname(clash, channel=OTHER_CHAN)
             self.assertEqual(caught.exception.owner_id, CHAN)
         self.assertEqual(json.dumps(self.store, sort_keys=True), before)
+
+    def test_nicknames_differing_in_case_or_punctuation_are_different(self):
+        """Case-sensitive (D81): "A" and "a" can name two conversations."""
+        self.nickname("A", channel=CHAN)
+        self.assertEqual(self.nickname("a", channel=OTHER_CHAN), "added")
+        self.nickname("Planning Team", channel="D0000000003")
+        for other, channel in (("planning team", "D0000000004"),
+                               ("Planning-Team", "D0000000005")):
+            with self.subTest(other=other):
+                self.assertEqual(self.nickname(other, channel=channel), "added")
 
     def test_re_saving_its_own_nickname_is_fine(self):
         self.nickname("Planning Team")
@@ -1798,7 +1808,7 @@ class SaveCommandTests(CommandTest):
     def test_duplicate_nickname_is_refused_and_nothing_is_saved(self):
         self.run_save(CHAN, "Planning Team")
         before = self.path.read_text()
-        code, _, err = self.run_save("D0000000003", "planning-team")
+        code, _, err = self.run_save("D0000000003", "Planning Team")
         self.assertEqual(code, 1)
         self.assertIn(f"already used by {CHAN} (project-planning)", err)
         self.assertEqual(self.path.read_text(), before)
@@ -1861,6 +1871,242 @@ class SaveCommandTests(CommandTest):
         self.assertIn("unexpected scope", err)
         self.assertEqual(slack.calls, ["auth.test"])
         self.assertFalse(self.path.exists())
+
+
+class ReservedNicknameTests(CommandTest):
+    """save refuses a nickname that `slack-export NICKNAME` would read as
+    something else, before Slack is asked or the index is touched."""
+
+    def run_save(self, *argv):
+        self.slack = FakeSlack(SaveCommandTests.CONVERSATIONS)
+        with mock.patch.object(ec, "connect", return_value=self.slack):
+            return self.run_main("save", *argv)
+
+    def test_command_words_ids_and_links_are_refused(self):
+        cases = {"list": "runs the list command", "group": "runs the group command",
+                 "save": "runs the save command",
+                 "C0123456789": "looks like a conversation ID",
+                 "GARDENING": "looks like a conversation ID",
+                 "https://example.slack.com/archives/C0123456789":
+                     "looks like a conversation ID"}
+        for nickname, why in cases.items():
+            with self.subTest(nickname=nickname):
+                code, _, err = self.run_save(CHAN, nickname)
+                self.assertEqual(code, 1)
+                self.assertIn("can't be a nickname", err)
+                self.assertIn(why, err)
+                self.assertIn("Nothing was saved", err)
+                self.assertEqual(self.slack.calls, [])
+                self.assertFalse(self.path.exists())
+
+    def test_a_leading_dash_is_refused(self):
+        self.assertIn("starts with a dash", ec.nickname_problem("-notes"))
+
+    def test_names_that_only_contain_those_words_are_fine(self):
+        # Names of 8 letters or more starting with C, D or G have the shape of
+        # an ID only in capitals, which is how an export reads IDs.
+        # Command words are exact too, as main() reads them: "List" is fine.
+        for nickname in ("Group Chat", "listening", "C012", "Notes - list",
+                         "Clarissa", "Daydreams", "Gardening", "c0123456789",
+                         "List", "SAVE", "group!"):
+            with self.subTest(nickname=nickname):
+                self.assertIsNone(ec.nickname_problem(nickname))
+        code, _, _ = self.run_save(CHAN, "Group", "Chat")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.stored()["nickname"], "Group Chat")
+
+    def stored(self):
+        return json.loads(self.path.read_text())["workspaces"][TEAM]["channels"][CHAN]
+
+
+class NicknameExportTests(CommandTest):
+    """`slack-export NICKNAME [name ...]` does what `slack-export ID [name ...]`
+    does. export_one is replaced by a recorder, so these check which
+    conversations and file names a command line means, not the fetch."""
+
+    def setUp(self):
+        super().setUp()
+        self.store = cd.empty()
+
+    def nick(self, channel, nickname, team=TEAM):
+        cd.set_nickname(self.store, team, "Example" if team == TEAM else "Other",
+                        channel, nickname)
+        ec.save_directory(self.store, self.path)
+
+    def run_export(self, *argv):
+        """Run an export; returns (exit code, output, error, [(ID, file stem)])."""
+        self.slack = FakeSlack({})
+        jobs = []
+
+        def record(client, job, *rest, **kw):
+            jobs.append((job["conversation_id"], job["stem"]))
+
+        with mock.patch.object(ec, "connect", return_value=self.slack), \
+                mock.patch.object(ec, "RAW_DIR", self.tmp / "raw"), \
+                mock.patch.object(ec, "export_one", side_effect=record):
+            code, out, err = self.run_main(*argv, "--out", str(self.tmp / "out"))
+        return code, out, err, jobs
+
+    # ── the same as typing the ID ──
+
+    def test_a_nickname_exports_exactly_what_its_id_does(self):
+        self.nick("D0000000003", "Alice Smith")
+        code, out, _, by_nickname = self.run_export("Alice Smith")
+        self.assertEqual(code, 0)
+        _, _, _, by_id = self.run_export("D0000000003")
+        self.assertEqual(by_nickname, [("D0000000003", "D0000000003")])
+        self.assertEqual(by_nickname, by_id, "same conversation, same file name")
+        self.assertIn("nickname   : Alice Smith = D0000000003", out)
+
+    def test_nicknames_are_case_sensitive(self):
+        """D81: "A" and "a" are two nicknames; each exports only its own."""
+        self.nick(CHAN, "A")
+        self.nick(OTHER_CHAN, "a")
+        self.assertEqual(self.run_export("A")[3], [(CHAN, CHAN)])
+        self.assertEqual(self.run_export("a")[3], [(OTHER_CHAN, OTHER_CHAN)])
+
+    def test_another_case_or_punctuation_is_not_a_match_but_is_suggested(self):
+        self.nick(CHAN, "Project Planning")
+        for typed in ("project planning", "Project-Planning", "PROJECT PLANNING"):
+            with self.subTest(typed=typed):
+                code, _, err, jobs = self.run_export(typed)
+                self.assertEqual((code, jobs), (1, []))
+                self.assertIn('Did you mean: "Project Planning"?', err)
+        self.assertEqual(self.slack.calls, [])
+
+    def test_a_name_shaped_like_an_id_only_in_capitals_works(self):
+        self.nick("D0000000003", "Clarissa")
+        self.assertEqual(self.run_export("Clarissa")[3],
+                         [("D0000000003", "D0000000003")])
+
+    def test_words_after_a_nickname_name_its_files_as_after_an_id(self):
+        self.nick("D0000000003", "Alice")
+        self.assertEqual(self.run_export("Alice", "Lab", "Notes")[3],
+                         [("D0000000003", "Lab-Notes")])
+        self.assertEqual(self.run_export("D0000000003", "Lab", "Notes")[3],
+                         [("D0000000003", "Lab-Notes")])
+
+    def test_ids_after_a_nickname_are_more_conversations(self):
+        self.nick("D0000000003", "Alice")
+        self.assertEqual(
+            self.run_export("Alice", "Mine", OTHER_CHAN, "Theirs")[3],
+            [("D0000000003", "Mine"), (OTHER_CHAN, "Theirs")])
+
+    def test_a_second_bare_nickname_is_a_file_name_not_a_conversation(self):
+        """The documented limit: only the first word can be a nickname."""
+        self.nick("D0000000003", "Alice")
+        self.nick("D0000000004", "Bob")
+        self.assertEqual(self.run_export("Alice", "Bob")[3],
+                         [("D0000000003", "Bob")])
+
+    def test_slack_is_asked_once_more_only_for_a_nickname(self):
+        self.nick("D0000000003", "Alice")
+        self.run_export("D0000000003")
+        self.assertEqual(self.slack.calls, ["auth.test"])
+        self.run_export("Alice")
+        self.assertEqual(self.slack.calls, ["auth.test", "auth.test"])
+
+    # ── what was meant, when it is not a nickname ──
+
+    def test_an_unknown_word_stops_before_slack(self):
+        self.nick(CHAN, "Planning")
+        code, _, err, jobs = self.run_export("Zebra")
+        self.assertEqual(code, 1)
+        self.assertIn("Zebra is not a Slack conversation ID or a saved nickname",
+                      err)
+        self.assertIn("slack-export save ID NICKNAME", err)
+        self.assertEqual((self.slack.calls, jobs), ([], []))
+
+    def test_no_index_at_all(self):
+        code, _, err, _ = self.run_export("Alice")
+        self.assertEqual(code, 1)
+        self.assertIn("not a Slack conversation ID or a saved nickname", err)
+        self.assertFalse(self.path.exists(), "a failed lookup writes no index")
+
+    def test_a_typo_or_a_start_suggests_saved_nicknames(self):
+        self.nick("D0000000003", "Alice Smith")
+        self.nick(CHAN, "Planning")
+        _, _, err, _ = self.run_export("Planing")
+        self.assertIn("Did you mean: Planning?", err)
+        _, _, err, _ = self.run_export("Ali")
+        self.assertIn('Did you mean: "Alice Smith"?', err)
+        self.assertEqual(self.slack.calls, [])
+
+    def test_a_nickname_with_spaces_typed_without_quotes(self):
+        self.nick(CHAN, "Project Planning")
+        code, _, err, jobs = self.run_export("Project", "Planning")
+        self.assertEqual(code, 1)
+        self.assertIn('put it in quotes:\n       slack-export "Project Planning"',
+                      err)
+        self.assertEqual((self.slack.calls, jobs), ([], []))
+
+    def test_short_and_long_nicknames_unquoted_is_refused_as_ambiguous(self):
+        self.nick(CHAN, "Project")
+        self.nick(OTHER_CHAN, "Project Planning")
+        code, _, err, jobs = self.run_export("Project", "Planning")
+        self.assertEqual(code, 1)
+        self.assertIn('Project and "Project Planning" are both nicknames', err)
+        self.assertIn(f"use its ID:  slack-export {CHAN} Planning", err)
+        self.assertEqual(jobs, [])
+        # Either meaning can still be had.
+        self.assertEqual(self.run_export("Project Planning")[3],
+                         [(OTHER_CHAN, OTHER_CHAN)])
+        self.assertEqual(self.run_export("Project", "Notes")[3], [(CHAN, "Notes")])
+
+    # ── always the current index ──
+
+    def test_a_renamed_nickname_works_at_once_and_the_old_one_stops(self):
+        self.nick(CHAN, "Planning")
+        self.nick(CHAN, "Roadmap")
+        self.assertEqual(self.run_export("Roadmap")[3], [(CHAN, CHAN)])
+        code, _, err, jobs = self.run_export("Planning")
+        self.assertEqual((code, jobs), (1, []))
+        self.assertIn("not a Slack conversation ID or a saved nickname", err)
+
+    def test_a_removed_nickname_stops_working(self):
+        self.nick(CHAN, "Planning")
+        del self.store["workspaces"][TEAM]["channels"][CHAN]["nickname"]
+        ec.save_directory(self.store, self.path)
+        self.assertEqual(self.run_export("Planning")[3], [])
+
+    # ── workspaces ──
+
+    def test_only_the_workspace_this_token_is_for(self):
+        self.nick("D0000000003", "Alice", team=OTHER_TEAM)
+        code, _, err, jobs = self.run_export("Alice")
+        self.assertEqual((code, jobs), (1, []))
+        self.assertIn("Alice is a nickname saved in another Slack workspace "
+                      "(Other)", err)
+        self.assertIn("this token is for Example. Nothing was exported.", err)
+
+    def test_the_same_nickname_in_two_workspaces_means_this_ones(self):
+        self.nick("D0000000004", "Alice", team=OTHER_TEAM)
+        self.nick("D0000000003", "Alice")
+        self.assertEqual(self.run_export("Alice")[3],
+                         [("D0000000003", "D0000000003")])
+
+    def test_a_hand_edited_duplicate_is_refused(self):
+        self.nick(CHAN, "Planning")
+        self.store["workspaces"][TEAM]["channels"][OTHER_CHAN] = {
+            "nickname": "Planning"}
+        ec.save_directory(self.store, self.path)
+        code, _, err, jobs = self.run_export("Planning")
+        self.assertEqual((code, jobs), (1, []))
+        self.assertIn(f"nickname of more than one conversation ({CHAN}, "
+                      f"{OTHER_CHAN})", err)
+
+    # ── nothing that worked before changes ──
+
+    def test_command_words_still_run_their_commands(self):
+        self.nick(CHAN, "Planning")
+        code, out, _ = self.run_main("list")
+        self.assertEqual(code, 0)
+        self.assertIn("Planning", out)
+
+    def test_an_id_needs_no_index_and_never_reads_it_first(self):
+        with mock.patch.object(ec, "load_directory",
+                               side_effect=AssertionError("index read")):
+            self.assertEqual(self.run_export(CHAN, "Notes")[3], [(CHAN, "Notes")])
 
 
 if __name__ == "__main__":

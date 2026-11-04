@@ -179,6 +179,12 @@ You can give any conversation your own nickname:
 slack-export save D0123456789 Alex
 ```
 
+Then type the nickname instead of the ID to export it:
+
+```sh
+slack-export Alex
+```
+
 You can also use `save` to remember a conversation without exporting it first.
 
 You can collect conversations into groups of your own, such as one per project:
@@ -222,7 +228,7 @@ slack-export group --li    →  slack-export group --list
 slack-export --group Con   →  slack-export --group Contacts
 ```
 
-Tab completes command words, options, your group names, the conversation IDs in your conversation index, and folders after `--out`. Matching is case-sensitive. When several things match, your shell lists them; in bash, press Tab twice.
+Tab completes command words, options, your group names, the conversation IDs and nicknames in your conversation index, and folders after `--out`. Matching is case-sensitive. When several things match, your shell lists them; in bash, press Tab twice.
 
 `install.sh` turns this on for zsh, the Mac's default shell, by adding one line to `~/.zshrc`. Open a new terminal tab afterwards. If you use bash, the installer prints the line to add to `~/.bash_profile` instead. Installed before tab completion existed? Run `sh install.sh` again. `slack-export` works the same without it. See [Tab completion](USAGE.md#tab-completion) in USAGE.md for details.
 

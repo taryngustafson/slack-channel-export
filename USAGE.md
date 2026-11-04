@@ -73,6 +73,8 @@ If the link contains `?` (message links usually do), wrap it in quotes:
 slack-export "https://example.slack.com/archives/C0123456789/p1787000000000100?thread_ts=1787000000.000100&cid=C0123456789"
 ```
 
+Once you have given a conversation a nickname, you can type that instead of the ID. See [Export by nickname](#export-by-nickname).
+
 Press Return.
 
 The exporter prints its progress while it works. Large conversations with many threads can take longer because thread replies have to be fetched separately.
@@ -146,6 +148,8 @@ If Slack refuses one of them (a mistyped ID, or a channel you are not in), that 
 ```
 
 `--out` and `--no-threads` apply to all of them. `--copy` works with one conversation at a time.
+
+A nickname can take the place of the first ID only. `slack-export Alex Sam` exports Alex's conversation under the file name `Sam`; it does not export two conversations. To export several, type their IDs after the first, or put them in a group.
 
 To export conversations you have collected in a group, see [Export a whole group](#export-a-whole-group).
 
@@ -463,9 +467,32 @@ Quotes are optional, just like they are when naming an export:
 slack-export save D0123456789 "Alex Kim"
 ```
 
-Within the same Slack workspace, a nickname can belong to only one conversation in your conversation index.
+Within the same Slack workspace, a nickname can belong to only one conversation in your conversation index. Nicknames are case-sensitive, so `A` and `a` are two different nicknames and can belong to two different conversations.
 
 Saving the same conversation again with a new nickname changes it. Saving it again without a nickname leaves the existing nickname alone.
+
+A nickname can't be `list`, `save` or `group` (`List` is fine), look like a conversation ID or a Slack link, or start with a dash, because `slack-export NICKNAME` would read it as something else.
+
+### Export by nickname
+
+Once a conversation has a nickname, you can type the nickname instead of its ID:
+
+```sh
+slack-export Alex
+slack-export "Alex Kim"
+```
+
+This does exactly what typing the ID does. The files are named by the ID unless you name them, and words after the nickname name the files, as they do after an ID:
+
+```sh
+slack-export "Alex Kim" Weekly Notes
+```
+
+Put a nickname with spaces in quotes. Without them, only the first word is looked up as a nickname. If the words together make up a nickname you saved, `slack-export` stops and shows you how to type it.
+
+A nickname must be typed exactly as you saved it, including capitals, spaces and punctuation: `slack-export a` never exports the conversation nicknamed `A`. A nickname that doesn't match exactly exports nothing, and the message suggests the saved nicknames closest to what you typed, such as `Alex Kim` for `alex-kim`.
+
+Only the first word can be a nickname; see [Export several conversations at once](#export-several-conversations-at-once). A nickname belongs to one Slack workspace, so before exporting, `slack-export` asks Slack (read-only) which workspace your token is for, and uses the nickname saved there.
 
 ### Save a conversation without exporting it
 
@@ -849,7 +876,7 @@ Press Tab partway through a word to finish it, as you would with `cd`. When seve
 
 | After you type | Tab offers |
 |---|---|
-| `slack-export` | `list`, `save`, `group`, and the IDs in your conversation index |
+| `slack-export` | `list`, `save`, `group`, and the IDs and nicknames in your conversation index |
 | a `-` | the options that command takes, such as `--group` or `--out` |
 | `--group`, `list --groups`, `group` | your group names |
 | `save`, or an ID to export | the IDs in your conversation index |
@@ -858,7 +885,9 @@ Press Tab partway through a word to finish it, as you would with `cd`. When seve
 | `--sort-by` | `name`, `id`, `nickname`, `export` |
 | `--out` | folders |
 
-Anywhere else, such as a file name, a nickname or a search word, Tab offers nothing, because any text could go there. Tab only reads your conversation index: it never contacts Slack or changes anything. A conversation's ID is offered once it is in the index, after you have exported it, saved it, or added it to a group.
+A nickname is offered only as the first word, the one place it can stand in for an ID, and one with spaces is completed as a single word, escaped for your shell. Nicknames from every workspace in your index are offered, since Tab never asks Slack which one your token is for.
+
+Anywhere else, such as a file name, a new nickname or a search word, Tab offers nothing, because any text could go there. Tab only reads your conversation index: it never contacts Slack or changes anything. A conversation's ID is offered once it is in the index, after you have exported it, saved it, or added it to a group.
 
 ### How it is turned on
 
@@ -933,9 +962,25 @@ Or, while you are inside the project folder:
 
 ### `is not a Slack conversation ID`
 
-The value you provided does not contain a valid Slack conversation ID.
+The value you provided does not contain a valid Slack conversation ID, and, for an export, is not one of your saved nicknames either.
 
-Try copying the channel ID or Slack link again.
+Try copying the channel ID or Slack link again. For a nickname, check the suggestions in the message, or see your nicknames with `slack-export list`.
+
+### `is a nickname saved in another Slack workspace`
+
+The nickname belongs to a conversation in a different Slack workspace from the one your token is for. Nothing was exported. To export it, use a token for that workspace.
+
+### `are both nicknames, so this could mean either`
+
+You typed a nickname with spaces without quotes, and its first word is also a nickname, such as `Project` and `Project Planning`. The message shows both ways to type it: in quotes for the longer nickname, or with the ID for the shorter one with a file name.
+
+### `is the nickname of more than one conversation`
+
+`save` never allows this, so the conversation index was probably edited by hand. Export by ID, or give one of them a different nickname with `slack-export save ID NEW-NICKNAME`.
+
+### `can't be a nickname`
+
+The nickname you tried to save would be read as something else when typed in place of an ID. The message says why. Choose another nickname.
 
 ### `no Keychain entry 'SLACK_USER_TOKEN'`
 
@@ -1045,7 +1090,7 @@ Another `slack-export` running at the same time held the conversation index for 
 
 ### `the nickname '...' is already used by`
 
-Within a workspace, each nickname can belong to only one conversation. The message names the conversation that already has it. Choose another nickname, or give that conversation a different one first.
+Within a workspace, each nickname can belong to only one conversation. Nicknames are compared exactly, so this means the very same nickname, including capitals. The message names the conversation that already has it. Choose another nickname, or give that conversation a different one first.
 
 ## Good to know
 

@@ -22,6 +22,7 @@ conversations named on the command line or in a group you made - it never
 enumerates the workspace.
 
     slack-export C0123456789
+    slack-export Alex                           # by the nickname you saved
     slack-export C0123456789 Project Planning   # name the output file
     slack-export C0123456789 D0123456789        # several, one after another
     slack-export C0123456789 Planning D0123456789 Alice   # ...each with a name
@@ -891,6 +892,132 @@ def _quote(word: str) -> str:
     return f'"{word}"' if " " in word else word
 
 
+# ── a nickname in place of the first ID ──────────────────────────────────────
+#
+# `slack-export NICKNAME [name ...]` does what `slack-export ID [name ...]` does.
+# Only the FIRST word can be a nickname: after it, words keep their meaning of
+# file name, up to the next ID, so nothing typed before nicknames existed
+# changes meaning. Several bare nicknames are not several conversations.
+
+def nickname_problem(nickname: str):
+    """Why `nickname` could never be typed in place of an ID, or None if it can.
+
+    Checked by save, so a nickname that `slack-export NICKNAME` would read as
+    something else is refused before it is stored.
+    """
+    # Exact, like the command words themselves: "List" is a usable nickname.
+    if nickname.strip() in COMMANDS:
+        word = nickname.strip()
+        return (f"slack-export {word} runs the {word} command, so this "
+                f"nickname could never export anything")
+    # Exactly what an export would read as an ID, which is case-sensitive: an
+    # ordinary name such as "Gardening" is fine, "GARDENING" is not.
+    if parse_conversation_id(nickname):
+        return ("it looks like a conversation ID or a Slack link, so it would "
+                "be read as one")
+    if nickname.startswith("-"):
+        return "it starts with a dash, so it would be read as an option"
+    return None
+
+
+def _words_before_next_id(rest: list) -> list:
+    """The file-name words typed after the first word, up to the next ID."""
+    words = []
+    for word in rest:
+        if parse_conversation_id(word):
+            break
+        words.append(word)
+    return words
+
+
+def _longer_nickname(store: dict, word: str, rest: list, team_id: str = None):
+    """The longest saved nickname that `word` and the words after it spell out
+    together, as when "Project Planning" is typed without quotes; or None."""
+    words = _words_before_next_id(rest)
+    for count in range(len(words), 0, -1):
+        typed = " ".join([word] + words[:count])
+        if channel_directory.nickname_holders(store, typed, team_id):
+            return typed
+    return None
+
+
+def _not_a_target(store: dict, word: str, rest: list) -> str:
+    """The FATAL message for a first word that is neither an ID nor a saved
+    nickname in any workspace: what the user most likely meant, if anything."""
+    lines = [f"FATAL: {_quote(word)} is not a Slack conversation ID or a saved "
+             f"nickname."]
+    longer = _longer_nickname(store, word, rest)
+    similar = channel_directory.similar_nicknames(store, word)
+    if longer:
+        lines.append(f"       To export the conversation nicknamed "
+                     f"\"{longer}\", put it in quotes:")
+        lines.append(f"       slack-export \"{longer}\"")
+    elif similar:
+        lines.append("       Did you mean: "
+                     + ", ".join(_quote(name) for name in similar) + "?")
+        lines.append("       Your saved nicknames: slack-export list")
+    else:
+        lines.append("       Expected C0123456789 (a channel), D0123456789 (a "
+                     "DM), a Slack link,")
+        lines.append("       or a nickname saved with: slack-export save ID "
+                     "NICKNAME")
+        lines.append("       In Slack: click the channel name -> About -> "
+                     "Channel ID, at the bottom.")
+    return "\n".join(lines)
+
+
+def resolve_nickname(store: dict, word: str, rest: list, auth: dict) -> str:
+    """The conversation ID that `word` is the nickname of, in the workspace this
+    token is for (auth.test's answer). Exits explaining why if there is none,
+    or if the words after it could be read as a longer nickname as well.
+    """
+    team_id = auth["team_id"]
+    holders = channel_directory.nickname_holders(store, word, team_id)
+    if not holders:
+        elsewhere = channel_directory.nickname_holders(store, word)
+        names = sorted({store["workspaces"][team].get("name") or team
+                        for team, _ in elsewhere})
+        sys.exit(f"FATAL: {_quote(word)} is a nickname saved in another Slack "
+                 f"workspace ({', '.join(names)}),\n"
+                 f"       but this token is for {auth['team']}. "
+                 f"Nothing was exported.")
+    if len(holders) > 1:
+        ids = ", ".join(channel for _, channel in holders)
+        sys.exit(f"FATAL: {_quote(word)} is the nickname of more than one "
+                 f"conversation ({ids}).\n"
+                 f"       Export by ID, or give one of them another nickname:\n"
+                 f"       slack-export save ID NEW-NICKNAME")
+    conversation_id = holders[0][1]
+    longer = _longer_nickname(store, word, rest, team_id)
+    if longer:
+        file_name = " ".join(_words_before_next_id(rest))
+        sys.exit(f"FATAL: {_quote(word)} and \"{longer}\" are both nicknames, so "
+                 f"this could mean either.\n"
+                 f"       To export \"{longer}\", put it in quotes:  "
+                 f"slack-export \"{longer}\"\n"
+                 f"       To name {_quote(word)}'s files {_quote(file_name)}, "
+                 f"use its ID:  slack-export {conversation_id} {file_name}")
+    return conversation_id
+
+
+def _nickname_target(word: str, rest: list):
+    """For an export whose first word is not an ID: the Slack client, the
+    conversation ID that word is the nickname of, and a line saying so.
+
+    A word that is no one's nickname stops here, offline. Otherwise Slack is
+    asked which workspace the token is for, read-only, since a nickname means
+    one conversation per workspace; the export then goes on as if the ID had
+    been typed, reusing the same client.
+    """
+    store = load_directory()
+    if not channel_directory.nickname_holders(store, word):
+        sys.exit(_not_a_target(store, word, rest))
+    client = connect()
+    _, auth = assert_read_only(client, quiet=True)
+    conversation_id = resolve_nickname(store, word, rest, auth)
+    return client, conversation_id, f"  nickname   : {word} = {conversation_id}"
+
+
 # What can be typed after --sort-by, and the order in channel_directory.SORT_KEYS
 # each one asks for. One word per order, with no second spellings.
 SORT_ORDERS = {"name": "slack_name", "id": "id", "nickname": "nickname",
@@ -1157,6 +1284,12 @@ def save_command(argv) -> None:
     args = parser.parse_args(argv)
     conversation_id = require_conversation_id(args.conversation_id)
     nickname = " ".join(args.nickname).strip()
+    # A nickname stands in for the ID in `slack-export NICKNAME`, so one that
+    # would be read as something else there is refused, before Slack is asked.
+    problem = nickname and nickname_problem(nickname)
+    if problem:
+        sys.exit(f"FATAL: {_quote(nickname)} can't be a nickname: {problem}.\n"
+                 f"       Nothing was saved. Pick another nickname.")
 
     # Read before Slack is contacted: a damaged store should cost nothing.
     store = load_directory()
@@ -2253,7 +2386,8 @@ def _export_parser() -> argparse.ArgumentParser:
     # enumerates the workspace or guesses what to export.
     parser.add_argument("conversation_id",
                         help="Slack conversation ID - C... (channel) or D... (DM) "
-                             "- or a Slack link containing one")
+                             "- a Slack link containing one, or its saved "
+                             "nickname")
     # Optional, and the LAST positional: every leftover word is joined into the file
     # name, so quotes are welcome but not required -
     #   slack-export C0123456789 Project Planning
@@ -2310,8 +2444,14 @@ def main() -> None:
     _self_test()
     incremental._self_test()
 
+    # A first word that is not an ID may be a saved nickname, which stands in
+    # for its ID; everything from here on is as if the ID had been typed.
+    first, client, nickname_line = args.conversation_id, None, None
+    if parse_conversation_id(first) is None:
+        client, first, nickname_line = _nickname_target(first, args.name)
+
     # Before anything else: is each of those actually a conversation ID?
-    targets = split_targets(args.conversation_id, args.name)
+    targets = split_targets(first, args.name)
     if args.copy and len(targets) > 1:
         sys.exit("FATAL: --copy works with one conversation at a time.\n"
                  "       Leave it off to export several, or export the one you "
@@ -2376,12 +2516,14 @@ def main() -> None:
                 f"       Pick another name, or move the existing files aside.")
         job["archive"] = archive
 
-    client = connect()
+    client = client or connect()
 
     print("=" * 63)
     print(" PRE-FLIGHT")
     print("=" * 63)
     granted, auth = assert_read_only(client)
+    if nickname_line:
+        print(nickname_line)
 
     # One after another, not in parallel: Slack rate-limits per token. One that
     # Slack refuses is skipped and the rest still go ahead, so the order they were

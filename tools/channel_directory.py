@@ -63,6 +63,7 @@ repository, and the writer refuses to save it anywhere Git could track it. None 
 is ever written into an export.
 """
 
+import difflib
 import re
 from datetime import datetime, timezone
 
@@ -139,18 +140,64 @@ class NicknameTaken(ValueError):
 def nickname_owner(data: dict, team_id: str, nickname: str):
     """The (ID, entry) already holding `nickname` in this workspace, or None.
 
-    Compared the way search compares, so "Project Planning" and "project-planning"
-    count as the same nickname: two that differ only in case or punctuation could
-    never be told apart when typed back in. A nickname with no letters or digits
-    at all, such as an emoji, is compared as typed, so two different ones are not
-    mistaken for the same.
+    Compared exactly, apart from spaces around it: nicknames are case-sensitive
+    (D81), so "A" and "a", or "Project Planning" and "project-planning", are
+    different nicknames and can belong to different conversations. Typed back
+    in, each finds only its own, since an export looks nicknames up the same way.
     """
-    wanted = _name_key(nickname)
-    workspace = data["workspaces"].get(team_id, {"channels": {}})
-    for channel_id, entry in workspace["channels"].items():
-        if entry.get("nickname") and _name_key(entry["nickname"]) == wanted:
-            return channel_id, entry
-    return None
+    holders = nickname_holders(data, nickname, team_id)
+    if not holders:
+        return None
+    channel_id = holders[0][1]
+    return channel_id, data["workspaces"][team_id]["channels"][channel_id]
+
+
+def nickname_holders(data: dict, nickname: str, team_id: str = None) -> list:
+    """Every (workspace ID, conversation ID) whose nickname is exactly
+    `nickname`, ignoring only spaces around it; only in `team_id` when one is
+    given.
+
+    Normally at most one per workspace, since save refuses a duplicate; more
+    than one means the index was edited by hand. Read fresh on every call, so a
+    renamed or removed nickname stops matching at once.
+    """
+    wanted = nickname.strip()
+    if not wanted:
+        return []
+    return [(team, channel_id)
+            for team, workspace in data["workspaces"].items()
+            if team_id is None or team == team_id
+            for channel_id, entry in workspace["channels"].items()
+            if (entry.get("nickname") or "").strip() == wanted]
+
+
+def similar_nicknames(data: dict, word: str, limit: int = 3) -> list:
+    """Saved nicknames close to `word`, for a "did you mean" line, as saved.
+
+    Compared loosely, the way search compares, although nicknames themselves
+    are exact: first those that differ from `word` only in case or punctuation
+    ("alice" for "Alice"), then those that begin with it, then near-misses in
+    spelling.
+    """
+    wanted = _name_key(word)
+    if not wanted:
+        return []
+    by_key = {}
+    for workspace in data["workspaces"].values():
+        for entry in workspace["channels"].values():
+            name = entry.get("nickname")
+            if name and name.strip() != word.strip():
+                by_key.setdefault(_name_key(name), set()).add(name)
+    keys = sorted(by_key)
+    order = ([wanted] if wanted in by_key else []) \
+        + [key for key in keys if key.startswith(wanted) and key != wanted] \
+        + difflib.get_close_matches(wanted, keys, n=limit, cutoff=0.6)
+    found = []
+    for key in order:
+        for name in sorted(by_key[key]):
+            if name not in found:
+                found.append(name)
+    return found[:limit]
 
 
 def set_nickname(data: dict, team_id: str, team_name: str, channel_id: str,

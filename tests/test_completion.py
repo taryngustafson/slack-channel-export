@@ -70,8 +70,9 @@ class CompletionTest(unittest.TestCase):
 
 class WhatTabOffersTests(CompletionTest):
 
-    def test_first_word_is_a_command_or_an_id(self):
-        self.assertEqual(self.tab("slack-export "), ["list", "save", "group"] + ALL_IDS)
+    def test_first_word_is_a_command_an_id_or_a_nickname(self):
+        self.assertEqual(self.tab("slack-export "),
+                         ["list", "save", "group"] + ALL_IDS + ["Planning"])
 
     def test_commands_complete_from_their_start(self):
         self.assertEqual(self.tab("slack-export g"), ["group"])
@@ -125,7 +126,7 @@ class WhatTabOffersTests(CompletionTest):
         self.assertEqual(self.tab("slack-export C0000000001 "), ALL_IDS)
 
     def test_free_text_offers_nothing(self):
-        """A nickname, a file name or a search: nothing valid to offer (D78),
+        """A new nickname, a file name or a search: nothing valid to offer,
         and never the files in the current folder."""
         self.assertEqual(self.tab("slack-export save C0000000001 "), [])
         self.assertEqual(self.tab("slack-export list "), [])
@@ -151,6 +152,83 @@ class WhatTabOffersTests(CompletionTest):
         self.tab("slack-export C0000000001 ")
         self.assertEqual(sorted(p.name for p in self.work.iterdir()), before)
         self.assertEqual(json.loads(self.index.read_text()), INDEX)
+
+
+# Nicknames: two workspaces, a nickname with a space, one with an apostrophe, one
+# shaped like an ID in lower case (usable), and one saved by hand as a real ID,
+# which slack-export could never read as a nickname.
+NICKNAME_INDEX = {
+    "version": 1,
+    "workspaces": {
+        "T0000000001": {"name": "Example", "channels": {
+            "C0000000001": {"nickname": "Planning"},
+            "C0000000002": {"nickname": "C0000000009"},
+            "C0000000005": {"nickname": "Gardening"},
+            "D0000000003": {"nickname": "Alice Smith"}}},
+        "T0000000002": {"name": "Other", "channels": {
+            "D0000000004": {"nickname": "Bob's DMs"}}}},
+    "groups": {"Research": [{"workspace": "T0000000001", "channel": "C0000000001"}]},
+}
+NICKNAME_IDS = ["C0000000001", "C0000000002", "C0000000005", "D0000000003",
+                "D0000000004"]
+
+
+class NicknameTabTests(CompletionTest):
+    """A nickname is offered only where the export accepts one: its first word."""
+
+    def setUp(self):
+        super().setUp()
+        self.index.write_text(json.dumps(NICKNAME_INDEX))
+
+    def test_first_word_offers_usable_nicknames_quoted_for_the_shell(self):
+        self.assertEqual(
+            self.tab("slack-export "),
+            ["list", "save", "group"] + NICKNAME_IDS
+            + ["Alice\\ Smith", "Bob\\'s\\ DMs", "Gardening", "Planning"])
+
+    def test_a_nickname_with_spaces_completes_as_one_word(self):
+        self.assertEqual(self.tab("slack-export Al"), ["Alice\\ Smith"])
+        self.assertEqual(self.tab("slack-export Bo"), ["Bob\\'s\\ DMs"])
+        # Inside a quote the shell closes it, so the name comes back as saved.
+        self.assertEqual(self.tab('slack-export "Al'), ["Alice Smith"])
+
+    def test_a_reserved_nickname_is_not_offered(self):
+        self.assertNotIn("C0000000009", self.tab("slack-export "))
+        self.assertEqual(self.tab("slack-export C0000000009"), [])
+        self.assertEqual(self.tab("slack-export G"), ["Gardening"])
+
+    def test_case_sensitive_like_the_export(self):
+        """D81: "A" and "a" are two nicknames; Tab keeps them apart too."""
+        index = json.loads(json.dumps(NICKNAME_INDEX))
+        channels = index["workspaces"]["T0000000001"]["channels"]
+        channels["C0000000006"] = {"nickname": "A"}
+        channels["C0000000007"] = {"nickname": "a"}
+        self.index.write_text(json.dumps(index))
+        self.assertEqual(self.tab("slack-export A"), ["A", "Alice\\ Smith"])
+        self.assertEqual(self.tab("slack-export a"), ["a"])
+        self.assertEqual(self.tab("slack-export plan"), [])
+
+    def test_nowhere_but_the_first_word(self):
+        # After the first word comes a file name or another ID: IDs only.
+        self.assertEqual(self.tab("slack-export Planning "), NICKNAME_IDS)
+        self.assertEqual(self.tab("slack-export C0000000001 Al"), [])
+        self.assertEqual(self.tab("slack-export save "), NICKNAME_IDS)
+        self.assertEqual(self.tab("slack-export save C0000000001 "), [])
+        self.assertEqual(self.tab("slack-export group Research "),
+                         ["C0000000002", "C0000000005", "D0000000003",
+                          "D0000000004"])
+        self.assertEqual(self.tab("slack-export --group "), ["Research"])
+
+    def test_renamed_and_removed_nicknames_change_at_once(self):
+        self.assertEqual(self.tab("slack-export Pl"), ["Planning"])
+        index = json.loads(json.dumps(NICKNAME_INDEX))
+        channels = index["workspaces"]["T0000000001"]["channels"]
+        channels["C0000000001"]["nickname"] = "Roadmap"
+        del channels["D0000000003"]["nickname"]
+        self.index.write_text(json.dumps(index))
+        self.assertEqual(self.tab("slack-export Pl"), [])
+        self.assertEqual(self.tab("slack-export Ro"), ["Roadmap"])
+        self.assertEqual(self.tab("slack-export Al"), [])
 
 
 # Runs the tool as __main__ with `import argcomplete` made to fail, as in a
@@ -212,6 +290,22 @@ class RealShellTests(CompletionTest):
                              env={"HOME": str(self.home), "PATH": self.path},
                              cwd=self.work, capture_output=True, text=True)
         self.assertEqual((run.stdout.strip(), run.stderr), ("Contacts", ""))
+
+    @unittest.skipUnless(shutil.which("bash"), "bash is not installed")
+    def test_bash_completes_a_nickname_with_a_space_as_one_word(self):
+        self.index.write_text(json.dumps(NICKNAME_INDEX))
+        script = f"""
+            . "{self.completion}"
+            COMP_LINE="slack-export Ali"; COMP_POINT=${{#COMP_LINE}}
+            COMP_WORDS=(slack-export Ali); COMP_CWORD=1
+            _python_argcomplete slack-export Ali slack-export
+            printf '%s\\n' "${{COMPREPLY[@]}}"
+        """
+        run = subprocess.run(["bash", "--norc", "--noprofile", "-c", script],
+                             env={"HOME": str(self.home), "PATH": self.path},
+                             cwd=self.work, capture_output=True, text=True)
+        # One word, escaped, then the space that moves on to the next word.
+        self.assertEqual((run.stdout, run.stderr), ("Alice\\ Smith \n", ""))
 
     @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
     def test_zsh_without_compinit_loads_it_without_errors(self):
