@@ -949,14 +949,9 @@ def _sorted(rows: list, sort_by: str, reverse: bool) -> list:
     return channel_directory.sort_rows(rows, SORT_ORDERS[sort_by], reverse)
 
 
-def list_command(argv) -> None:
-    """`slack-export list [search ...]`, `list --search WORD ...` and
-    `list --groups [GROUP ...] [--search WORD ...]`: print conversations or
-    groups from the conversation index. Offline.
-
-    Filter, sort and format are separate steps in channel_directory, so a new
-    sort order or column is a table entry there and a choice or flag here.
-    """
+def _list_parser() -> argparse.ArgumentParser:
+    """The parser for `slack-export list`: built here, apart from running the
+    command, so that tab completion can use it too."""
     parser = argparse.ArgumentParser(
         prog="slack-export list",
         usage="slack-export list [search ...]\n"
@@ -1015,6 +1010,18 @@ def list_command(argv) -> None:
                              "the conversations in those groups (names are "
                              "exact; quote a name with spaces)")
     _add_sort_flags(parser)
+    return parser
+
+
+def list_command(argv) -> None:
+    """`slack-export list [search ...]`, `list --search WORD ...` and
+    `list --groups [GROUP ...] [--search WORD ...]`: print conversations or
+    groups from the conversation index. Offline.
+
+    Filter, sort and format are separate steps in channel_directory, so a new
+    sort order or column is a table entry there and a choice or flag here.
+    """
+    parser = _list_parser()
     args = parser.parse_args(argv)
 
     if args.search and args.search_flag:
@@ -1119,13 +1126,9 @@ def _list_groups(store: dict, names: list, term,
         print(line)
 
 
-def save_command(argv) -> None:
-    """`slack-export save <ID> [nickname ...]`: remember a conversation.
-
-    Asks Slack which workspace the token belongs to (auth.test, which is also the
-    read-only check) and what the conversation is (conversations.info), so the
-    entry is keyed correctly and the ID is known to exist before it is saved.
-    """
+def _save_parser() -> argparse.ArgumentParser:
+    """The parser for `slack-export save`: built here, apart from running the
+    command, so that tab completion can use it too."""
     parser = argparse.ArgumentParser(
         prog="slack-export save",
         description="Save a conversation to your conversation index, so "
@@ -1140,6 +1143,17 @@ def save_command(argv) -> None:
     parser.add_argument("nickname", nargs="*",
                         help="your own name for it (optional); must not already "
                              "belong to another conversation in your index")
+    return parser
+
+
+def save_command(argv) -> None:
+    """`slack-export save <ID> [nickname ...]`: remember a conversation.
+
+    Asks Slack which workspace the token belongs to (auth.test, which is also the
+    read-only check) and what the conversation is (conversations.info), so the
+    entry is keyed correctly and the ID is known to exist before it is saved.
+    """
+    parser = _save_parser()
     args = parser.parse_args(argv)
     conversation_id = require_conversation_id(args.conversation_id)
     nickname = " ".join(args.nickname).strip()
@@ -1346,19 +1360,9 @@ def _confirm_list_word(as_name, meant, shown):
     sys.exit("Cancelled. Nothing was changed.")
 
 
-def group_command(argv) -> None:
-    """`slack-export group NAME [ID ...]`: make a group, or add conversations to
-    one. `--remove ID ...` takes conversations out of it; `--delete` deletes it;
-    `--list` prints its conversations, as `list --groups NAME` does - or, with no
-    name, every group and its size, as `list --groups` does. Removing, deleting
-    and listing are always local.
-
-    Conversations already in the conversation index are handled locally. One that
-    is not is looked up in Slack, read-only, and added to the index first - so the
-    Keychain and Slack are touched only when some ID actually needs it. Adds what
-    it can and reports the rest; exits 1 if anything could not be added, but only
-    after saving what was.
-    """
+def _group_parser() -> argparse.ArgumentParser:
+    """The parser for `slack-export group`: built here, apart from running the
+    command, so that tab completion can use it too."""
     parser = argparse.ArgumentParser(
         prog="slack-export group",
         usage="slack-export group name [ID ...]\n"
@@ -1412,6 +1416,23 @@ def group_command(argv) -> None:
                         help="list the conversations in the group - or, with "
                              "no name, all your groups - changing nothing")
     _add_sort_flags(parser)
+    return parser
+
+
+def group_command(argv) -> None:
+    """`slack-export group NAME [ID ...]`: make a group, or add conversations to
+    one. `--remove ID ...` takes conversations out of it; `--delete` deletes it;
+    `--list` prints its conversations, as `list --groups NAME` does - or, with no
+    name, every group and its size, as `list --groups` does. Removing, deleting
+    and listing are always local.
+
+    Conversations already in the conversation index are handled locally. One that
+    is not is looked up in Slack, read-only, and added to the index first - so the
+    Keychain and Slack are touched only when some ID actually needs it. Adds what
+    it can and reports the rest; exits 1 if anything could not be added, but only
+    after saving what was.
+    """
+    parser = _group_parser()
     # Intermixed, so `group Research --remove C0123 D0456` parses on every Python
     # this supports: plain parse_args on 3.9 takes the IDs' slot as filled (empty)
     # before it reaches --remove, and then rejects the IDs.
@@ -1994,17 +2015,9 @@ def _group_jobs(conversation_id: str, places: list) -> list:
     return list(jobs.values())
 
 
-def group_export(argv) -> None:
-    """`slack-export --group NAME`: export or top up every conversation in a group.
-
-    Works out every destination first, offline (see destinations.py): each copy
-    that still exists is topped up where it is, under its own name; one with no
-    copy left gets a fresh one named by its ID. Anything that could overwrite or
-    mix conversations - two members under one name, an archive holding another
-    conversation, a path git could commit, a stray temporary file - stops the
-    whole run before Slack is contacted. After that, a member that fails is
-    reported and skipped, and the rest carry on; the exit code is 1 if any failed.
-    """
+def _group_export_parser() -> argparse.ArgumentParser:
+    """The parser for `slack-export --group NAME`: built here, apart from running the
+    command, so that tab completion can use it too."""
     parser = argparse.ArgumentParser(
         prog="slack-export",
         usage="slack-export --group name [--out DIR] [--no-threads]",
@@ -2022,6 +2035,21 @@ def group_export(argv) -> None:
     parser.add_argument("--copy", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--no-clipboard", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("words", nargs="*", help=argparse.SUPPRESS)
+    return parser
+
+
+def group_export(argv) -> None:
+    """`slack-export --group NAME`: export or top up every conversation in a group.
+
+    Works out every destination first, offline (see destinations.py): each copy
+    that still exists is topped up where it is, under its own name; one with no
+    copy left gets a fresh one named by its ID. Anything that could overwrite or
+    mix conversations - two members under one name, an archive holding another
+    conversation, a path git could commit, a stray temporary file - stops the
+    whole run before Slack is contacted. After that, a member that fails is
+    reported and skipped, and the rest carry on; the exit code is 1 if any failed.
+    """
+    parser = _group_export_parser()
     args = parser.parse_intermixed_args(argv)
 
     if len(args.group) > 1:
@@ -2199,15 +2227,9 @@ def group_export(argv) -> None:
         sys.exit(1)
 
 
-def main() -> None:
-    argv = sys.argv[1:]
-    if argv and argv[0] in COMMANDS:
-        COMMANDS[argv[0]](argv[1:])
-        return
-    if _wants_group_export(argv):
-        group_export(argv)
-        return
-
+def _export_parser() -> argparse.ArgumentParser:
+    """The parser for an export, `slack-export ID ...`: built here, apart from
+    running the command, so that tab completion can use it too."""
     parser = argparse.ArgumentParser(
         prog="slack-export", description=__doc__,
         # Spelled out rather than left to argparse, which lists the flags first.
@@ -2257,6 +2279,19 @@ def main() -> None:
                         help="where to put the .md and .txt "
                              "(default: exports/; the .raw.json archive always "
                              "stays in exports/raw/)")
+    return parser
+
+
+def main() -> None:
+    argv = sys.argv[1:]
+    if argv and argv[0] in COMMANDS:
+        COMMANDS[argv[0]](argv[1:])
+        return
+    if _wants_group_export(argv):
+        group_export(argv)
+        return
+
+    parser = _export_parser()
     # Intermixed, so a flag can sit between targets as well as after them -
     # `ID Lab --out DIR ID Meeting` - and every word that is not a flag still
     # reaches split_targets in the order it was typed.
