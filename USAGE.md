@@ -879,7 +879,7 @@ Press Tab partway through a word to finish it, as you would with `cd`. When seve
 | `slack-export` | `list`, `save`, `group`, and the IDs and nicknames in your conversation index |
 | a `-` | the options that command takes, such as `--group` or `--out` |
 | `--group`, `list --groups`, `group` | your group names |
-| `save`, or an ID to export | the IDs in your conversation index |
+| `save`, or an ID or nickname to export | the IDs in your conversation index |
 | `group NAME` | the IDs in your conversation index that are not in that group yet |
 | `group NAME --remove` | the IDs in that group |
 | `--sort-by` | `name`, `id`, `nickname`, `export` |
@@ -909,6 +909,7 @@ To turn tab completion off, delete that line from `~/.zshrc`, or run `sh install
 * **Installed before tab completion existed?** Run `sh install.sh` again from the project folder. It installs what tab completion needs and adds the line.
 * **The installer said `skipped: argcomplete is not installed`.** Installing the Python packages failed, usually for lack of an internet connection. Run `sh install.sh` again once you are online.
 * **An ID is not offered.** Only conversations in your conversation index are offered. Export or save the conversation once, and its ID will be offered from then on.
+* **A nickname is not offered.** Matching is case-sensitive, so start typing it with the same capitals you saved it with. Nicknames are offered only as the first word after `slack-export`.
 
 `slack-export` itself works the same with or without tab completion.
 

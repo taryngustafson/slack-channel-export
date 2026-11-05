@@ -1260,7 +1260,7 @@ def _save_parser() -> argparse.ArgumentParser:
         prog="slack-export save",
         description="Save a conversation to your conversation index, so "
                     "`slack-export list` can find its ID again. Records its Slack channel name and kind, and your "
-                    "nickname for it if you give one. Saving again refreshes the "
+                    "nickname for it if you give one, which you can then type in place of its ID. Saving again refreshes the "
                     "Slack channel name; a nickname is only changed by giving a "
                     "new one. Contacts Slack, read-only.")
     parser.add_argument("conversation_id",
@@ -1268,8 +1268,8 @@ def _save_parser() -> argparse.ArgumentParser:
                              "- or a Slack link containing one")
     # Every leftover word is the nickname, so quotes are optional, as for an export.
     parser.add_argument("nickname", nargs="*",
-                        help="your own name for it (optional); must not already "
-                             "belong to another conversation in your index")
+                        help="your own name for it (optional, case-sensitive); must "
+                             "not already belong to another conversation in your index")
     return parser
 
 

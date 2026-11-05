@@ -185,6 +185,8 @@ Then type the nickname instead of the ID to export it:
 slack-export Alex
 ```
 
+Nicknames are case-sensitive, so type one exactly as you saved it: `slack-export alex` does not export `Alex`.
+
 You can also use `save` to remember a conversation without exporting it first.
 
 You can collect conversations into groups of your own, such as one per project:
