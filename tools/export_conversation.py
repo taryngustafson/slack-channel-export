@@ -1037,6 +1037,25 @@ SORT_NEEDS_A_GROUP = ("FATAL: --sort-by and --reverse order the conversations in
                       "  slack-export list --groups <group> --sort-by export")
 
 
+class _WrittenHelpParser(argparse.ArgumentParser):
+    """A parser whose -h page and usage block are written out whole, shown
+    exactly as written instead of assembled by argparse (which would add its own
+    "positional arguments" and "options" sections). The usage block is also what
+    an error prints above itself. The arguments' help= strings are still used:
+    Tab shows them beside each flag."""
+
+    def __init__(self, *args, written_usage: str, written_help: str, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.written_usage = written_usage
+        self.written_help = written_help
+
+    def format_usage(self) -> str:
+        return self.written_usage
+
+    def format_help(self) -> str:
+        return self.written_help
+
+
 class _HelpFormatter(argparse.RawDescriptionHelpFormatter):
     """Keeps the description as written, and also the line breaks in any flag's
     help that has them, such as --sort-by's table. Help without line breaks is
@@ -1053,17 +1072,15 @@ def _add_sort_flags(parser) -> None:
     conversation table."""
     parser.add_argument("--sort-by", choices=tuple(SORT_ORDERS),
                         default=DEFAULT_SORT_ORDER, metavar="{name,id,nickname,export}",
-                        help="changes conversation list order:\n"
-                             "  name      sorts alphabetically by SLACK NAME "
-                             "(default)\n"
-                             "  id        sorts alphanumerically by ID\n"
-                             "  nickname  sorts alphabetically by NICKNAME\n"
-                             "  export    sorts in order of recency by LAST "
-                             "EXPORTED")
+                        help="Sort conversations by:\n"
+                             "  name       Slack name (default)\n"
+                             "  id         Conversation ID\n"
+                             "  nickname   Saved nickname\n"
+                             "  export     Last export time (most recent first)")
     parser.add_argument("--sort", action=_NoSuchFlag, nargs="?", const="--sort-by",
                         help=argparse.SUPPRESS)
     parser.add_argument("--reverse", action="store_true",
-                        help="list conversations in the opposite order")
+                        help="Reverse the selected sort order.")
 
 
 def _sort_was_asked_for(args) -> bool:
@@ -1076,49 +1093,74 @@ def _sorted(rows: list, sort_by: str, reverse: bool) -> list:
     return channel_directory.sort_rows(rows, SORT_ORDERS[sort_by], reverse)
 
 
+# `slack-export list -h`, in the same style as TOP_HELP. Caveats (what [brackets]
+# and (DM) mean, blanks sorting last) are in USAGE.md, not here.
+LIST_USAGE = """\
+usage:
+  slack-export list [search ...] [options]
+  slack-export list --groups [GROUP ...] [--search WORD ...] [options]
+"""
+
+LIST_HELP = LIST_USAGE + """
+Browse saved Slack conversations and groups without contacting Slack.
+
+Conversation listings show each conversation's ID, nickname, Slack name,
+and last export time.
+
+EXAMPLES
+  slack-export list
+      List all saved conversations.
+
+  slack-export list planning
+      Find conversations matching "planning".
+
+  slack-export list --sort-by export
+      Sort by most recent export.
+
+  slack-export list --sort-by export --reverse
+      Show never-exported conversations and oldest exports first.
+
+  slack-export list --groups
+      List all saved groups and their sizes.
+
+  slack-export list --groups Research
+      List conversations in the Research group.
+
+  slack-export list --groups Research Work
+      List conversations from both groups.
+
+  slack-export list --groups Research --search planning
+      Search within the Research group.
+
+OPTIONS
+  -h, --help
+      Show this help message and exit.
+
+  --search WORD [WORD ...]
+      Filter conversations by search terms.
+
+  --groups [GROUP ...]
+      List saved groups or conversations in specified groups.
+
+  --sort-by {name,id,nickname,export}
+      Sort conversations by:
+        name       Slack name (default)
+        id         Conversation ID
+        nickname   Saved nickname
+        export     Last export time (most recent first)
+
+  --reverse
+      Reverse the selected sort order.
+
+For more details, see USAGE.md.
+"""
+
+
 def _list_parser() -> argparse.ArgumentParser:
     """The parser for `slack-export list`: built here, apart from running the
-    command, so that tab completion can use it too."""
-    parser = argparse.ArgumentParser(
-        prog="slack-export list",
-        usage="slack-export list [search ...]\n"
-              "       slack-export list --search WORD [WORD ...]\n"
-              "       slack-export list --groups [GROUP ...] "
-              "[--search WORD [WORD ...]]\n"
-              "       slack-export list ... [--sort-by {name,id,nickname,export}] [--reverse]",
-        # Line breaks written out, since RawDescriptionHelpFormatter keeps them as
-        # they are - it is what lets the paragraphs stay separate.
-        description="Print every conversation in your conversation index, one per\n"
-                    "line, under a header naming the four columns: its ID, your\n"
-                    "nickname for it, its Slack channel name, and how long ago\n"
-                    "you last exported it. Sorted by Slack\n"
-                    "channel name, or by nickname for a conversation Slack gives\n"
-                    "no name, such as a 1:1 DM.\n\n"
-                    "With no nickname, the nickname column shows the name of its\n"
-                    "most recent export in [brackets] - a name you did not choose -\n"
-                    "unless that export was given no name. A DM has no Slack\n"
-                    "channel name, so it shows as (DM) - unless it is a group DM\n"
-                    "someone has named.\n"
-                    "LAST EXPORTED is when an export last ran, under any file name\n"
-                    "- not whether Slack has anything newer. It is not searched.\n"
-                    "A '-' marks an empty column, such as a conversation never\n"
-                    "exported.\n\n"
-                    "--groups alone lists your groups and how many conversations\n"
-                    "each has. With group names, it lists the conversations in\n"
-                    "those groups instead; add --search to search within them.\n"
-                    "With several names, every conversation in any of them is\n"
-                    "listed once, and a GROUPS column says which it is in.\n\n"
-                    "--sort-by changes the order: name (the default, described\n"
-                    "above) sorts alphabetically by SLACK NAME; id sorts\n"
-                    "alphanumerically by ID; nickname sorts alphabetically by\n"
-                    "NICKNAME, those with none last; export sorts in order of\n"
-                    "recency by LAST EXPORTED, most recent first and the never\n"
-                    "exported last. --reverse turns any order back to front,\n"
-                    "so with --sort-by export the ones never exported or\n"
-                    "exported longest ago come first.\n\n"
-                    "Reads only the conversation index - never the Keychain or "
-                    "Slack.",
-        formatter_class=_HelpFormatter)
+    command, so that tab completion can use it too. Its -h is LIST_HELP."""
+    parser = _WrittenHelpParser(prog="slack-export list",
+                                written_usage=LIST_USAGE, written_help=LIST_HELP)
     # The nickname column used to be opt-in. It is always shown now, but -n is
     # still accepted, silently, so a habit or a script that types it keeps working.
     parser.add_argument("-n", "--nicknames", action="store_true",
@@ -1129,13 +1171,12 @@ def _list_parser() -> argparse.ArgumentParser:
                              "Slack channel name contains this - ignoring case, "
                              "spaces and punctuation")
     parser.add_argument("--search", dest="search_flag", nargs="+", metavar="WORD",
-                        help="the same search, spelled out; needed with --groups")
+                        help="Filter conversations by search terms.")
     # Any number of names, so `--groups Research Work` already works. None when
     # absent, [] when given alone, so the two can be told apart.
     parser.add_argument("--groups", nargs="*", metavar="GROUP",
-                        help="with no names, list your groups; with names, list "
-                             "the conversations in those groups (names are "
-                             "exact; quote a name with spaces)")
+                        help="List saved groups or conversations in specified "
+                             "groups.")
     _add_sort_flags(parser)
     return parser
 
@@ -2481,22 +2522,12 @@ For more details, see USAGE.md.
 """
 
 
-class _TopLevelParser(argparse.ArgumentParser):
-    """The export parser, showing TOP_HELP for -h and TOP_USAGE above an error,
-    exactly as written."""
-
-    def format_usage(self) -> str:
-        return TOP_USAGE
-
-    def format_help(self) -> str:
-        return TOP_HELP
-
-
 def _export_parser() -> argparse.ArgumentParser:
     """The parser for an export, `slack-export ID ...`: built here, apart from
     running the command, so that tab completion can use it too. Its -h is
     TOP_HELP; the help= strings below are what Tab shows beside each flag."""
-    parser = _TopLevelParser(prog="slack-export")
+    parser = _WrittenHelpParser(prog="slack-export", written_usage=TOP_USAGE,
+                                written_help=TOP_HELP)
     # No default, and nargs is not '?' - the target is REQUIRED. This tool never
     # enumerates the workspace or guesses what to export.
     parser.add_argument("conversation_id", metavar="ID",
