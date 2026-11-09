@@ -1294,23 +1294,53 @@ def _list_groups(store: dict, names: list, term,
         print(line)
 
 
+# `slack-export save -h`, in the same style as TOP_HELP.
+SAVE_USAGE = """\
+usage:
+  slack-export save ID [nickname ...]
+"""
+
+SAVE_HELP = SAVE_USAGE + """
+Save a Slack conversation to your index without exporting it.
+
+Optionally assign a nickname that you can use instead of the conversation
+ID when exporting. Saving an existing conversation updates its Slack
+information; its nickname changes only if you provide a new one.
+
+EXAMPLES
+  slack-export save C0123456789
+      Save a conversation for future use.
+
+  slack-export save C0123456789 Project Planning
+      Save a conversation with the nickname "Project Planning".
+
+ARGUMENTS
+  ID
+      Slack conversation ID (C... or D...) or a Slack conversation link.
+
+  nickname
+      Optional, case-sensitive nickname unique to the conversation.
+
+OPTIONS
+  -h, --help
+      Show this help message and exit.
+
+For more details, see USAGE.md.
+"""
+
+
 def _save_parser() -> argparse.ArgumentParser:
     """The parser for `slack-export save`: built here, apart from running the
-    command, so that tab completion can use it too."""
-    parser = argparse.ArgumentParser(
-        prog="slack-export save",
-        description="Save a conversation to your conversation index, so "
-                    "`slack-export list` can find its ID again. Records its Slack channel name and kind, and your "
-                    "nickname for it if you give one, which you can then type in place of its ID. Saving again refreshes the "
-                    "Slack channel name; a nickname is only changed by giving a "
-                    "new one. Contacts Slack, read-only.")
-    parser.add_argument("conversation_id",
-                        help="Slack conversation ID - C... (channel) or D... (DM) "
-                             "- or a Slack link containing one")
+    command, so that tab completion can use it too. Its -h is SAVE_HELP."""
+    parser = _WrittenHelpParser(prog="slack-export save",
+                                written_usage=SAVE_USAGE, written_help=SAVE_HELP)
+    parser.add_argument("conversation_id", metavar="ID",
+                        help="Slack conversation ID (C... or D...) or a Slack "
+                             "conversation link.")
     # Every leftover word is the nickname, so quotes are optional, as for an export.
     parser.add_argument("nickname", nargs="*",
-                        help="your own name for it (optional, case-sensitive); must "
-                             "not already belong to another conversation in your index")
+                        help="Optional, case-sensitive nickname unique to the "
+                             "conversation.")
     return parser
 
 
