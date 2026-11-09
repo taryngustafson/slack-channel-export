@@ -2360,31 +2360,146 @@ def group_export(argv) -> None:
         sys.exit(1)
 
 
+# `slack-export -h`, written out whole rather than
+# assembled by argparse, which would add its own "positional arguments" and
+# "options" sections. The usage block is also what an error prints above itself.
+TOP_USAGE = """\
+usage:
+  slack-export ID [name ...] [options]
+  slack-export ID [name ...] ID [name ...] ... [options]
+  slack-export --group GROUP [options]
+  slack-export save ID [nickname ...]
+  slack-export list [search ...] [options]
+  slack-export list --groups [GROUP] [--search WORD ...]
+  slack-export group GROUP [ID ...]
+  slack-export group GROUP --remove ID [ID ...]
+  slack-export group GROUP --delete
+  slack-export group GROUP --list
+  slack-export group --list
+"""
+
+TOP_HELP = TOP_USAGE + """
+Export Slack conversations to Markdown, plain text, and raw JSON.
+
+Supports channels and DMs, including thread replies. Re-running an export
+retrieves new activity and updates existing files without duplicating messages.
+Export by conversation ID or saved nickname, individually or in groups.
+
+EXPORTING
+  slack-export C0123456789
+      Export a conversation by its Slack ID.
+
+  slack-export Alex
+      Export using a saved nickname.
+
+  slack-export C0123456789 Project Notes
+      Export with a custom filename.
+
+  slack-export C0123456789 D0123456789
+      Export multiple conversations in one command.
+
+  slack-export C0123456789 --out ~/Desktop
+      Save Markdown and text files to a specific folder.
+
+  slack-export --group Research
+      Export every conversation in a saved group.
+
+  slack-export --group Research --out ~/Desktop
+      Export the group to a specific folder.
+
+SAVING AND FINDING CONVERSATIONS
+  slack-export save ID [nickname ...]
+      Save a conversation for future use, optionally with a nickname.
+
+  slack-export list
+      Show saved conversations, names, IDs, and last export times.
+
+  slack-export list planning
+      Find saved conversations matching a search term.
+
+  slack-export list --sort-by export
+      Sort by most recent export.
+
+  slack-export list --sort-by nickname
+      Sort alphabetically by nickname.
+
+MANAGING GROUPS
+  slack-export group Research
+      Create an empty group.
+
+  slack-export group Research ID [ID ...]
+      Add conversations to a group.
+
+  slack-export group Research --remove ID
+      Remove a conversation from a group.
+
+  slack-export group Research --delete
+      Delete a group without deleting its conversations or exports.
+
+  slack-export group Research --list
+      List conversations in a group.
+
+  slack-export list --groups
+      List all saved groups.
+
+  slack-export list --groups Research
+      List conversations in a specific group.
+
+OPTIONS
+  -h, --help
+      Show this help message and exit.
+
+  --out DIR
+      Directory for Markdown and text files (default: exports/).
+
+  --no-threads
+      Export top-level messages only; skip thread replies.
+
+  --copy
+      Copy the Markdown output to the clipboard (single exports only).
+
+  --sort-by {name,id,nickname,export}
+      Sort saved conversations (default: name).
+
+  --reverse
+      Reverse the selected sort order.
+
+  --search WORD [WORD ...]
+      Filter conversations within a group listing.
+
+FILES AND UPDATES
+  Markdown (.md) and text (.txt) files are saved to exports/ by default.
+  Raw archives (.raw.json) are always stored in exports/raw/.
+
+  Existing exports are updated incrementally. Group exports update existing
+  copies in their original locations unless --out specifies a directory.
+
+  Slack access is read-only. The tool never modifies Slack conversations
+  or scans the workspace for conversations to export.
+
+For more details, see USAGE.md.
+"""
+
+
+class _TopLevelParser(argparse.ArgumentParser):
+    """The export parser, showing TOP_HELP for -h and TOP_USAGE above an error,
+    exactly as written."""
+
+    def format_usage(self) -> str:
+        return TOP_USAGE
+
+    def format_help(self) -> str:
+        return TOP_HELP
+
+
 def _export_parser() -> argparse.ArgumentParser:
     """The parser for an export, `slack-export ID ...`: built here, apart from
-    running the command, so that tab completion can use it too."""
-    parser = argparse.ArgumentParser(
-        prog="slack-export", description=__doc__,
-        # Spelled out rather than left to argparse, which lists the flags first.
-        # What someone needs to type first is the conversation, so that comes
-        # first; the flags are optional and can go in any order after it.
-        usage="slack-export conversation_id [name ...] "
-              "[--out DIR] [--no-threads] [--copy]\n"
-              "       slack-export conversation_id [name ...] "
-              "conversation_id [name ...] ... [--out DIR] [--no-threads]\n"
-              "       slack-export --group name [--out DIR] [--no-threads]\n"
-              "       slack-export save conversation_id [nickname ...]\n"
-              "       slack-export list [search ...]\n"
-              "       slack-export list --groups [group ...] [--search word ...]\n"
-              "       slack-export group name [ID ...]\n"
-              "       slack-export group name --remove ID [ID ...]\n"
-              "       slack-export group name --delete\n"
-              "       slack-export group name --list\n"
-              "       slack-export group --list",
-        formatter_class=argparse.RawDescriptionHelpFormatter)
+    running the command, so that tab completion can use it too. Its -h is
+    TOP_HELP; the help= strings below are what Tab shows beside each flag."""
+    parser = _TopLevelParser(prog="slack-export")
     # No default, and nargs is not '?' - the target is REQUIRED. This tool never
     # enumerates the workspace or guesses what to export.
-    parser.add_argument("conversation_id",
+    parser.add_argument("conversation_id", metavar="ID",
                         help="Slack conversation ID - C... (channel) or D... (DM) "
                              "- a Slack link containing one, or its saved "
                              "nickname")
@@ -2397,22 +2512,20 @@ def _export_parser() -> argparse.ArgumentParser:
                         help="what to call the files of the ID before it "
                              "(default: that ID)")
     parser.add_argument("--no-threads", action="store_true",
-                        help="top-level messages only, skipping thread replies "
-                             "(much faster, but most of a busy channel is in "
-                             "the threads)")
+                        help="Export top-level messages only; skip thread "
+                             "replies.")
     # Off by default: a long export pasted by surprise can flood or freeze
     # whatever it lands in.
     parser.add_argument("--copy", action="store_true",
-                        help="also copy the Markdown to the clipboard "
-                             "(default: do not)")
+                        help="Copy the Markdown output to the clipboard "
+                             "(single exports only).")
     # The old opt-out, from when copying was automatic. Still accepted, silently,
     # so a habit or script that types it keeps working; it changes nothing now.
     parser.add_argument("--no-clipboard", action="store_true",
                         help=argparse.SUPPRESS)
     parser.add_argument("--out", metavar="DIR",
-                        help="where to put the .md and .txt "
-                             "(default: exports/; the .raw.json archive always "
-                             "stays in exports/raw/)")
+                        help="Directory for Markdown and text files "
+                             "(default: exports/).")
     return parser
 
 
