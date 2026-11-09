@@ -71,7 +71,6 @@ import os
 import re
 import subprocess
 import sys
-import textwrap
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -1056,17 +1055,6 @@ class _WrittenHelpParser(argparse.ArgumentParser):
         return self.written_help
 
 
-class _HelpFormatter(argparse.RawDescriptionHelpFormatter):
-    """Keeps the description as written, and also the line breaks in any flag's
-    help that has them, such as --sort-by's table. Help without line breaks is
-    wrapped as usual."""
-
-    def _split_lines(self, text, width):
-        if "\n" in text:
-            return text.splitlines()
-        return super()._split_lines(text, width)
-
-
 def _add_sort_flags(parser) -> None:
     """--sort-by and --reverse, the same on every command that prints the
     conversation table."""
@@ -1564,61 +1552,102 @@ def _confirm_list_word(as_name, meant, shown):
     sys.exit("Cancelled. Nothing was changed.")
 
 
+# `slack-export group -h`, in the same style as TOP_HELP.
+GROUP_USAGE = """\
+usage:
+  slack-export group GROUP [ID ...]
+  slack-export group GROUP --remove ID [ID ...]
+  slack-export group GROUP --delete
+  slack-export group GROUP --list [options]
+  slack-export group --list
+"""
+
+GROUP_HELP = GROUP_USAGE + """
+Create and manage groups of saved Slack conversations.
+
+Groups can contain multiple conversations, and a conversation can
+belong to more than one group. Removing a conversation or deleting
+a group does not delete saved conversations or exported files.
+
+EXAMPLES
+  slack-export group Research
+      Create an empty group.
+
+  slack-export group Research C0123456789 D0123456789
+      Add conversations to a group.
+
+  slack-export group Research --remove C0123456789
+      Remove a conversation from the group.
+
+  slack-export group Research --delete
+      Delete the group without deleting its conversations.
+
+  slack-export group Research --list
+      List conversations in the group.
+
+  slack-export group Research --list --sort-by export
+      List group conversations by most recent export.
+
+  slack-export group --list
+      List all saved groups and their sizes.
+
+ARGUMENTS
+  GROUP
+      Group name (case-sensitive; quote names containing spaces).
+
+  ID
+      Slack conversation ID (C... or D...) or a Slack conversation link.
+
+OPTIONS
+  -h, --help
+      Show this help message and exit.
+
+  --remove
+      Remove specified conversations from a group.
+
+  --delete
+      Delete the group without deleting its conversations.
+
+  --list
+      List conversations in a group, or all groups if none is specified.
+
+  --sort-by {name,id,nickname,export}
+      Sort listed conversations by:
+        name       Slack name (default)
+        id         Conversation ID
+        nickname   Saved nickname
+        export     Last export time (most recent first)
+
+  --reverse
+      Reverse the selected sort order.
+
+To export every conversation in a group, use slack-export --group GROUP.
+
+For more details, see USAGE.md.
+"""
+
+
 def _group_parser() -> argparse.ArgumentParser:
     """The parser for `slack-export group`: built here, apart from running the
-    command, so that tab completion can use it too."""
-    parser = argparse.ArgumentParser(
-        prog="slack-export group",
-        usage="slack-export group name [ID ...]\n"
-              "       slack-export group name --remove ID [ID ...]\n"
-              "       slack-export group name --delete\n"
-              "       slack-export group name --list "
-              "[--sort-by {name,id,nickname,export}] [--reverse]\n"
-              "       slack-export group --list",
-        # Each paragraph wrapped on its own, so the blank lines between them
-        # survive (the default formatter would run them together).
-        description="\n\n".join(textwrap.fill(paragraph, 78) for paragraph in (
-            "Make a group of conversations, or add conversations to one. With "
-            "only a name, makes an empty group. With IDs, adds them, making the "
-            "group first if it is new; adding never removes anything already in "
-            "it.",
-            "Conversations already in your conversation index are handled "
-            "locally. If an ID is not in it yet, slack-export looks it up in "
-            "Slack (read-only) and adds it to the conversation index before "
-            "adding it to the group. Conversations Slack cannot find or access "
-            "are not added.",
-            "--remove takes the given conversations out of the group; an "
-            "emptied group is kept. --delete deletes the group itself. Neither "
-            "removes anything from the conversation index, and both work without "
-            "Slack.",
-            "--list prints the conversations in the group and changes nothing. "
-            "It is the same as `slack-export list --groups name`, which can "
-            "also search within a group and show several groups at once. With "
-            "no name, --list prints all your groups and how many conversations "
-            "each has, as `slack-export list --groups` does. With a name, "
-            "--sort-by and --reverse choose the order, as they do for "
-            "`slack-export list`.",
-            "Group names are exact: 'Research' and 'research' are two groups. "
-            "Put a name with spaces in quotes.",
-            "To export every conversation in a group, use "
-            "`slack-export --group name`.")),
-        formatter_class=_HelpFormatter)
+    command, so that tab completion can use it too. Its -h is GROUP_HELP."""
+    parser = _WrittenHelpParser(prog="slack-export group",
+                                written_usage=GROUP_USAGE, written_help=GROUP_HELP)
     # Optional only so that `group --list` can list every group; everything
     # else still needs it, checked below.
-    parser.add_argument("name", nargs="?",
-                        help="the group's name (only --list works without it)")
+    parser.add_argument("name", nargs="?", metavar="GROUP",
+                        help="Group name (case-sensitive; quote names containing "
+                             "spaces).")
     parser.add_argument("conversations", nargs="*", metavar="ID",
-                        help="conversation IDs - C... or D... - or Slack links "
-                             "containing them")
+                        help="Slack conversation ID (C... or D...) or a Slack "
+                             "conversation link.")
     parser.add_argument("--remove", action="store_true",
-                        help="remove these conversations from the group instead "
-                             "of adding them")
+                        help="Remove specified conversations from a group.")
     parser.add_argument("--delete", action="store_true",
-                        help="delete the group itself (its conversations stay in "
-                             "the conversation index)")
+                        help="Delete the group without deleting its "
+                             "conversations.")
     parser.add_argument("--list", action="store_true",
-                        help="list the conversations in the group - or, with "
-                             "no name, all your groups - changing nothing")
+                        help="List conversations in a group, or all groups if "
+                             "none is specified.")
     _add_sort_flags(parser)
     return parser
 
