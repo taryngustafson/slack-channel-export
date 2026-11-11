@@ -1431,6 +1431,81 @@ def _index_from_slack(store: dict, auth: dict, conversation_id: str, info: dict)
                                channel_directory.kind_of(info))
 
 
+def _group_word_ids(store: dict, name: str, words: list, removing: bool) -> list:
+    """The words typed after a group's name, as conversation IDs: an ID or a
+    Slack link stays as it is, and a saved nickname becomes the ID it belongs to,
+    looked up in the conversation index alone.
+
+    One word is one conversation, so a nickname with spaces needs quotes. A word
+    that is neither an ID nor a saved nickname is a slip in the command itself -
+    often a group name with a space, typed without quotes - so it cancels the
+    whole command (D48), before anything changes or Slack is contacted.
+    """
+    ids, unknown, shared = [], [], []
+    for word in words:
+        if parse_conversation_id(word):
+            ids.append(word)
+            continue
+        holders = channel_directory.nickname_holders(store, word)
+        if len(holders) == 1:
+            ids.append(holders[0][1])
+        elif holders:
+            shared.append((word, holders))
+        else:
+            unknown.append(word)
+    if shared:
+        word, holders = shared[0]
+        sys.exit(f"Nothing was changed: {_quote(word)} is the nickname of more "
+                 f"than one conversation\n"
+                 f"({', '.join(channel for _, channel in holders)}). "
+                 f"Use the ID instead.")
+    if not unknown:
+        return ids
+
+    unknown = list(dict.fromkeys(unknown))
+    verb = ("is not a conversation ID or a saved nickname" if len(unknown) == 1
+            else "are not conversation IDs or saved nicknames")
+    lines = [f"Nothing was changed: {', '.join(map(_quote, unknown))} {verb}."]
+    fixed = _quote_spelled_nicknames(store, words)
+    if fixed:
+        flag = " --remove" if removing else ""
+        lines.append(f"A nickname with spaces needs quotes: "
+                     f"slack-export group {_quote(name)}{flag} {' '.join(fixed)}")
+        sys.exit("\n".join(lines))
+    similar = {word: channel_directory.similar_nicknames(store, word)
+               for word in unknown}
+    for word, names in similar.items():
+        if names:
+            prefix = "" if len(unknown) == 1 else f"{_quote(word)}: "
+            lines.append(f"{prefix}Did you mean "
+                         f"{', '.join(map(_quote, names))}?")
+    if not any(similar.values()):
+        lines.append('A group name with spaces needs quotes: '
+                     'slack-export group "Lab Notes" C0123456789')
+    sys.exit("\n".join(lines))
+
+
+def _quote_spelled_nicknames(store: dict, words: list) -> list:
+    """`words` again, with each run that spells out a saved nickname with spaces
+    joined into that nickname in quotes - as when `Project Planning` was typed
+    for "Project Planning". The longest run wins at each place, and a run never
+    spans an ID. None when no run spells one out."""
+    fixed, start, joined = [], 0, False
+    while start < len(words):
+        for end in range(len(words), start + 1, -1):
+            run = words[start:end]
+            if any(parse_conversation_id(word) for word in run):
+                continue
+            if channel_directory.nickname_holders(store, " ".join(run)):
+                fixed.append(f'"{" ".join(run)}"')
+                start, joined = end, True
+                break
+        else:
+            fixed.append(_quote(words[start]))
+            start += 1
+    return fixed if joined else None
+
+
 def _remove_from_group(store: dict, name: str, raw_ids: list) -> None:
     """`group NAME --remove ID ...`: take each conversation out of the group and
     report what happened to it. Partial success: one that was not a member does
@@ -1576,6 +1651,9 @@ EXAMPLES
   slack-export group Research C0123456789 D0123456789
       Add conversations to a group.
 
+  slack-export group Research Alex
+      Add a conversation by its saved nickname.
+
   slack-export group Research --remove C0123456789
       Remove a conversation from the group.
 
@@ -1596,7 +1674,8 @@ ARGUMENTS
       Group name (case-sensitive; quote names containing spaces).
 
   ID
-      Slack conversation ID (C... or D...) or a Slack conversation link.
+      Slack conversation ID (C... or D...), a Slack conversation link, or a
+      saved nickname (quote nicknames containing spaces).
 
 OPTIONS
   -h, --help
@@ -1638,8 +1717,9 @@ def _group_parser() -> argparse.ArgumentParser:
                         help="Group name (case-sensitive; quote names containing "
                              "spaces).")
     parser.add_argument("conversations", nargs="*", metavar="ID",
-                        help="Slack conversation ID (C... or D...) or a Slack "
-                             "conversation link.")
+                        help="Slack conversation ID (C... or D...), a Slack "
+                             "conversation link, or a saved nickname (quote "
+                             "nicknames containing spaces).")
     parser.add_argument("--remove", action="store_true",
                         help="Remove specified conversations from a group.")
     parser.add_argument("--delete", action="store_true",
@@ -1707,19 +1787,11 @@ def group_command(argv) -> None:
         sys.exit(f"FATAL: '{name}' is a conversation ID, not a group name.\n"
                  f"       Give the group's name first:  "
                  f"slack-export group <name> {name} ...")
-    # A word that is not a conversation ID is a slip in the command itself -
-    # usually a group name with a space, typed without quotes - so it cancels the
-    # whole command (D48), before the Keychain or Slack is touched.
-    not_ids = list(dict.fromkeys(raw for raw in args.conversations
-                                 if parse_conversation_id(raw) is None))
-    if not_ids:
-        verb = ("is not a conversation ID" if len(not_ids) == 1
-                else "are not conversation IDs")
-        sys.exit(f"Nothing was changed: {', '.join(not_ids)} {verb}.\n"
-                 f'A group name with spaces needs quotes: '
-                 f'slack-export group "Lab Notes" C0123456789')
-
     store = load_directory()
+    # A saved nickname stands in for its ID, one word per conversation; from
+    # here on, everything is as if the IDs had been typed.
+    args.conversations = _group_word_ids(store, name, args.conversations,
+                                         args.remove)
     existed = name in store.get("groups", {})
     if args.remove or args.delete or args.list:
         # Only an existing group can be listed, lose members or be deleted; none

@@ -101,10 +101,14 @@ class WhatTabOffersTests(CompletionTest):
         self.assertEqual(self.tab("slack-export group --li"), ["--list"])
         self.assertEqual(self.tab("slack-export group --list "), GROUPS)
 
-    def test_adding_offers_ids_not_in_the_group_yet(self):
+    def test_adding_offers_conversations_not_in_the_group_yet(self):
         self.assertEqual(self.tab("slack-export group Research "),
-                         ["C0000000001", "D0000000003"])
-        self.assertEqual(self.tab("slack-export group 'Lab Notes' "), ALL_IDS)
+                         ["C0000000001", "D0000000003", "Planning"])
+        self.assertEqual(self.tab("slack-export group 'Lab Notes' "),
+                         ALL_IDS + ["Planning"])
+        # Planning's conversation is in Contacts already.
+        self.assertEqual(self.tab("slack-export group Contacts "),
+                         ["C0000000002", "D0000000003"])
 
     def test_removing_offers_only_the_groups_members(self):
         self.assertEqual(self.tab("slack-export group Research --remove "),
@@ -112,6 +116,10 @@ class WhatTabOffersTests(CompletionTest):
         self.assertEqual(self.tab("slack-export group Research --remove C"),
                          ["C0000000002"])
         self.assertEqual(self.tab("slack-export group Research --rem"), ["--remove"])
+        self.assertEqual(self.tab("slack-export group Contacts --remove "),
+                         ["C0000000001", "Planning"])
+        self.assertEqual(self.tab("slack-export group Contacts --remove P"),
+                         ["Planning"])
 
     def test_list_groups_and_sort_choices(self):
         self.assertEqual(self.tab("slack-export list --groups "), GROUPS)
@@ -174,7 +182,8 @@ NICKNAME_IDS = ["C0000000001", "C0000000002", "C0000000005", "D0000000003",
 
 
 class NicknameTabTests(CompletionTest):
-    """A nickname is offered only where the export accepts one: its first word."""
+    """A nickname is offered only where one is accepted: an export's first word,
+    and the conversations after a group's name."""
 
     def setUp(self):
         super().setUp()
@@ -208,16 +217,21 @@ class NicknameTabTests(CompletionTest):
         self.assertEqual(self.tab("slack-export a"), ["a"])
         self.assertEqual(self.tab("slack-export plan"), [])
 
-    def test_nowhere_but_the_first_word(self):
-        # After the first word comes a file name or another ID: IDs only.
+    def test_nowhere_else(self):
+        # After an export's first word comes a file name or another ID: IDs only.
         self.assertEqual(self.tab("slack-export Planning "), NICKNAME_IDS)
         self.assertEqual(self.tab("slack-export C0000000001 Al"), [])
         self.assertEqual(self.tab("slack-export save "), NICKNAME_IDS)
         self.assertEqual(self.tab("slack-export save C0000000001 "), [])
+        self.assertEqual(self.tab("slack-export --group "), ["Research"])
+
+    def test_group_offers_usable_nicknames_quoted_for_the_shell(self):
         self.assertEqual(self.tab("slack-export group Research "),
                          ["C0000000002", "C0000000005", "D0000000003",
-                          "D0000000004"])
-        self.assertEqual(self.tab("slack-export --group "), ["Research"])
+                          "D0000000004", "Alice\\ Smith", "Bob\\'s\\ DMs",
+                          "Gardening"])
+        self.assertEqual(self.tab("slack-export group Research Al"),
+                         ["Alice\\ Smith"])
 
     def test_renamed_and_removed_nicknames_change_at_once(self):
         self.assertEqual(self.tab("slack-export Pl"), ["Planning"])

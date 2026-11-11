@@ -8,8 +8,8 @@ thing read is the conversation index.
 
 Only what the tool accepts in that spot is offered: the command words, flags,
 group names, folders for --out, conversation IDs already in the conversation
-index, and, as the first word of an export only, saved nicknames (the one place
-a nickname can stand in for an ID). Slack names are never offered. Matching is
+index, and saved nicknames where a nickname can stand in for an ID: the first
+word of an export, and the conversations after a group's name. Slack names are never offered. Matching is
 case-sensitive, as `cd` is. argcomplete quotes what it inserts, so a nickname
 with spaces arrives as one word.
 
@@ -136,15 +136,26 @@ class _Index:
     def _members(self, name) -> set:
         return {m["channel"] for m in self._read().get("groups", {}).get(name, [])}
 
+    def _nicknames_of(self, keep) -> list:
+        """The usable nicknames of the conversations whose ID `keep` accepts."""
+        return sorted({entry["nickname"]
+                       for workspace in self._read()["workspaces"].values()
+                       for channel, entry in workspace.get("channels", {}).items()
+                       if keep(channel) and entry.get("nickname")
+                       and not self._tool.nickname_problem(entry["nickname"])})
+
     def in_group(self, parsed_args, **_) -> list:
-        """What `group NAME --remove ID ...` can take: the group's own members."""
-        return sorted(self._members(parsed_args.name or ""))
+        """What `group NAME --remove ...` can take: the group's own members, by
+        ID and by nickname."""
+        members = self._members(parsed_args.name or "")
+        return sorted(members) + self._nicknames_of(members.__contains__)
 
     def not_in_group(self, parsed_args, **_) -> list:
-        """What `group NAME ID ...` can add: every indexed ID not in it yet.
-        Nothing before the name: argcomplete offers both slots there, since the
-        name is optional."""
+        """What `group NAME ...` can add: every indexed conversation not in it
+        yet, by ID and by nickname. Nothing before the name: argcomplete offers
+        both slots there, since the name is optional."""
         if not parsed_args.name:
             return []
         members = self._members(parsed_args.name)
-        return [i for i in self.ids() if i not in members]
+        return ([i for i in self.ids() if i not in members]
+                + self._nicknames_of(lambda channel: channel not in members))

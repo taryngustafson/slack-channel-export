@@ -1229,7 +1229,8 @@ class GroupCommandTests(CommandTest):
         before = self.path.read_text()
         code, _, err = self.run_main("group", "Lab", "Notes", CHAN, self.GONE)
         self.assertEqual(code, 1)
-        self.assertEqual(err, "Nothing was changed: Notes is not a conversation ID.\n"
+        self.assertEqual(err, "Nothing was changed: Notes is not a conversation ID "
+                              "or a saved nickname.\n"
                               'A group name with spaces needs quotes: '
                               'slack-export group "Lab Notes" C0123456789')
         self.assertEqual(self.path.read_text(), before)
@@ -1238,7 +1239,97 @@ class GroupCommandTests(CommandTest):
         self.fill()
         _, _, err = self.run_main("group", "Big", "Lab", "Notes", CHAN)
         self.assertTrue(err.startswith("Nothing was changed: Lab, Notes are not "
-                                       "conversation IDs.\n"))
+                                       "conversation IDs or saved nicknames.\n"))
+
+    # -- nicknames in place of IDs ------------------------------------------
+
+    def fill_nicknames(self):
+        """fill(), plus a one-word nickname: CHAN is "Planning Team", OTHER_CHAN
+        is "Alex"."""
+        self.fill()
+        store = self.stored()
+        cd.set_nickname(store, TEAM, "Example", OTHER_CHAN, "Alex")
+        ec.save_directory(store, self.path)
+
+    def test_a_nickname_adds_its_conversation_locally(self):
+        self.fill_nicknames()
+        code, out, _ = self.run_main("group", "Research", "Alex")
+        self.assertEqual(code, 0)
+        self.assertIn("Added to Research:", out)
+        self.assertEqual(self.members(), [OTHER_CHAN])
+
+    def test_ids_and_nicknames_mix_and_count_once(self):
+        self.fill_nicknames()
+        code, _, _ = self.run_main("group", "Research", CHAN, "Alex", OTHER_CHAN)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.members(), [CHAN, OTHER_CHAN])
+
+    def test_a_quoted_nickname_with_spaces_works(self):
+        self.fill_nicknames()
+        code, _, _ = self.run_main("group", "Research", "Planning Team")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.members(), [CHAN])
+
+    def test_nicknames_are_exact(self):
+        self.fill_nicknames()
+        before = self.path.read_text()
+        code, _, err = self.run_main("group", "Research", "alex")
+        self.assertEqual(code, 1)
+        self.assertEqual(err, "Nothing was changed: alex is not a conversation ID "
+                              "or a saved nickname.\nDid you mean Alex?")
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_an_unquoted_nickname_with_spaces_shows_the_quoted_command(self):
+        self.fill_nicknames()
+        before = self.path.read_text()
+        code, _, err = self.run_main("group", "Lab Notes", "Alex", "Planning",
+                                     "Team", OTHER_CHAN)
+        self.assertEqual(code, 1)
+        self.assertEqual(err, "Nothing was changed: Planning, Team are not "
+                              "conversation IDs or saved nicknames.\n"
+                              "A nickname with spaces needs quotes: slack-export "
+                              'group "Lab Notes" Alex "Planning Team" '
+                              f"{OTHER_CHAN}")
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_unknown_words_get_a_hint_each(self):
+        self.fill_nicknames()
+        _, _, err = self.run_main("group", "Research", "Alexx", "Zzzz")
+        self.assertEqual(err, "Nothing was changed: Alexx, Zzzz are not "
+                              "conversation IDs or saved nicknames.\n"
+                              "Alexx: Did you mean Alex?")
+
+    def test_a_nickname_in_two_workspaces_is_refused(self):
+        self.fill_nicknames()
+        store = self.stored()
+        cd.set_slack_name(store, OTHER_TEAM, "Elsewhere", "C0000000007", "misc")
+        store["workspaces"][OTHER_TEAM]["channels"]["C0000000007"]["nickname"] = "Alex"
+        ec.save_directory(store, self.path)
+        before = self.path.read_text()
+        code, _, err = self.run_main("group", "Research", "Alex")
+        self.assertEqual(code, 1)
+        self.assertIn("Alex is the nickname of more than one conversation", err)
+        self.assertIn(OTHER_CHAN, err)
+        self.assertIn("C0000000007", err)
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_remove_takes_a_nickname(self):
+        self.fill_nicknames()
+        self.run_main("group", "Research", CHAN, OTHER_CHAN)
+        code, out, _ = self.run_main("group", "Research", "--remove", "Alex")
+        self.assertEqual(code, 0)
+        self.assertIn("Removed from Research:", out)
+        self.assertEqual(self.members(), [CHAN])
+
+    def test_remove_with_an_unquoted_nickname_shows_the_quoted_command(self):
+        self.fill_nicknames()
+        self.run_main("group", "Research", CHAN)
+        before = self.path.read_text()
+        code, _, err = self.run_main("group", "Research", "--remove", "Planning",
+                                     "Team")
+        self.assertEqual(code, 1)
+        self.assertIn('slack-export group Research --remove "Planning Team"', err)
+        self.assertEqual(self.path.read_text(), before)
 
     def test_an_id_where_the_name_goes_is_refused(self):
         self.fill()
