@@ -195,6 +195,8 @@ You can collect conversations into groups of your own, such as one per project:
 slack-export group Research C0123456789 D0123456789
 ```
 
+A saved nickname works in place of an ID: `slack-export group Research Alex`.
+
 A conversation can be in any number of groups, or none. If a conversation is not in your conversation index yet, `group` looks it up in Slack and adds it to the index first.
 
 To see your groups, or the conversations in one:

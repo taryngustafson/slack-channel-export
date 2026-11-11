@@ -149,7 +149,7 @@ If Slack refuses one of them (a mistyped ID, or a channel you are not in), that 
 
 `--out` and `--no-threads` apply to all of them. `--copy` works with one conversation at a time.
 
-A nickname can take the place of the first ID only. `slack-export Alex Sam` exports Alex's conversation under the file name `Sam`; it does not export two conversations. To export several, type their IDs after the first, or put them in a group.
+In an export, a nickname can take the place of the first ID only. `slack-export Alex Sam` exports Alex's conversation under the file name `Sam`; it does not export two conversations. To export several, type their IDs after the first, or put them in a group.
 
 To export conversations you have collected in a group, see [Export a whole group](#export-a-whole-group).
 
@@ -492,7 +492,7 @@ Put a nickname with spaces in quotes. Without them, only the first word is looke
 
 A nickname must be typed exactly as you saved it, including capitals, spaces and punctuation: `slack-export a` never exports the conversation nicknamed `A`. A nickname that doesn't match exactly exports nothing, and the message suggests the saved nicknames closest to what you typed, such as `Alex Kim` for `alex-kim`.
 
-Only the first word can be a nickname; see [Export several conversations at once](#export-several-conversations-at-once). A nickname belongs to one Slack workspace, so before exporting, `slack-export` asks Slack (read-only) which workspace your token is for, and uses the nickname saved there.
+In an export, only the first word can be a nickname; see [Export several conversations at once](#export-several-conversations-at-once). You can also add conversations to a group, or take them out, by nickname; see [Add conversations to a group](#add-conversations-to-a-group). A nickname belongs to one Slack workspace, so before exporting, `slack-export` asks Slack (read-only) which workspace your token is for, and uses the nickname saved there.
 
 ### Save a conversation without exporting it
 
@@ -545,7 +545,7 @@ Making a group that already exists changes nothing.
 
 ### Add conversations to a group
 
-Put one or more conversation IDs or Slack links after the group's name:
+Put one or more conversation IDs, Slack links or saved nicknames after the group's name:
 
 ```sh
 slack-export group Research C0123456789 D0123456789
@@ -582,6 +582,16 @@ Research now has 3 conversations.
 
 Each conversation is reported once, under what happened to it. Conversations that could be added stay added even when others could not.
 
+A saved nickname works in place of an ID, and you can mix the two:
+
+```sh
+slack-export group Research Alex C0123456789
+```
+
+Each word is one conversation, so put a nickname with spaces in quotes: `slack-export group Research "Alex Kim"`. If you leave the quotes off and the words together make up a nickname you saved, nothing is changed and the message shows the command with the quotes added. A nickname must be typed exactly as you saved it, as when exporting; a near miss changes nothing, and the message suggests the closest saved nicknames.
+
+A nickname is looked up in your conversation index only, so adding by nickname never contacts Slack. If the same nickname is saved in two Slack workspaces, use the ID instead.
+
 ### Conversations not yet in your conversation index
 
 A conversation does not need to be saved or exported before you add it to a group.
@@ -600,10 +610,10 @@ A name with spaces needs quotes:
 slack-export group "Lab Notes" C0123456789
 ```
 
-Without the quotes, `slack-export` would read `Lab` as the group's name and `Notes` as a conversation. Because `Notes` is not a conversation ID, the whole command is cancelled before anything changes:
+Without the quotes, `slack-export` would read `Lab` as the group's name and `Notes` as a conversation. Because `Notes` is not a conversation ID or a saved nickname, the whole command is cancelled before anything changes:
 
 ```text
-Nothing was changed: Notes is not a conversation ID.
+Nothing was changed: Notes is not a conversation ID or a saved nickname.
 A group name with spaces needs quotes: slack-export group "Lab Notes" C0123456789
 ```
 
@@ -613,7 +623,7 @@ Groups are not shown by plain `slack-export list`, and are stored in the convers
 
 ### Remove conversations from a group
 
-Add `--remove` before the conversations to take out:
+Add `--remove` before the conversations to take out, by ID, Slack link or saved nickname:
 
 ```sh
 slack-export group Research --remove D0987654321 C0234567890
@@ -880,12 +890,12 @@ Press Tab partway through a word to finish it, as you would with `cd`. When seve
 | a `-` | the options that command takes, such as `--group` or `--out` |
 | `--group`, `list --groups`, `group` | your group names |
 | `save`, or an ID or nickname to export | the IDs in your conversation index |
-| `group NAME` | the IDs in your conversation index that are not in that group yet |
-| `group NAME --remove` | the IDs in that group |
+| `group NAME` | the IDs and nicknames in your conversation index that are not in that group yet |
+| `group NAME --remove` | the IDs and nicknames in that group |
 | `--sort-by` | `name`, `id`, `nickname`, `export` |
 | `--out` | folders |
 
-A nickname is offered only as the first word, the one place it can stand in for an ID, and one with spaces is completed as a single word, escaped for your shell. Nicknames from every workspace in your index are offered, since Tab never asks Slack which one your token is for.
+A nickname is offered only where it can stand in for an ID: as the first word, and after a group's name. One with spaces is completed as a single word, escaped for your shell. Nicknames from every workspace in your index are offered, since Tab never asks Slack which one your token is for.
 
 Anywhere else, such as a file name, a new nickname or a search word, Tab offers nothing, because any text could go there. Tab only reads your conversation index: it never contacts Slack or changes anything. A conversation's ID is offered once it is in the index, after you have exported it, saved it, or added it to a group.
 
@@ -909,7 +919,7 @@ To turn tab completion off, delete that line from `~/.zshrc`, or run `sh install
 * **Installed before tab completion existed?** Run `sh install.sh` again from the project folder. It installs what tab completion needs and adds the line.
 * **The installer said `skipped: argcomplete is not installed`.** Installing the Python packages failed, usually for lack of an internet connection. Run `sh install.sh` again once you are online.
 * **An ID is not offered.** Only conversations in your conversation index are offered. Export or save the conversation once, and its ID will be offered from then on.
-* **A nickname is not offered.** Matching is case-sensitive, so start typing it with the same capitals you saved it with. Nicknames are offered only as the first word after `slack-export`.
+* **A nickname is not offered.** Matching is case-sensitive, so start typing it with the same capitals you saved it with. Nicknames are offered only as the first word after `slack-export`, and after `group NAME`.
 
 `slack-export` itself works the same with or without tab completion.
 
@@ -1077,9 +1087,9 @@ The conversation index is inside a Git repository that does not ignore it, so it
 
 `slack-export group` asked Slack about a conversation that is not in your conversation index, and Slack could not return it. It was not added anywhere. The causes are the same as for [`channel_not_found`](#channel_not_found).
 
-### `Nothing was changed: ... is not a conversation ID`
+### `Nothing was changed: ... is not a conversation ID or a saved nickname`
 
-Something after the group's name is not a conversation ID or Slack link. Most often, a group name with a space was typed without quotes. Nothing was changed; put the name in quotes and run the command again.
+Something after the group's name is not a conversation ID, a Slack link or a saved nickname. Most often, a group name with a space was typed without quotes. Nothing was changed; put the name in quotes and run the command again. If the message suggests a nickname, or shows the command with a nickname in quotes, run that instead.
 
 ### `No group named '...'`
 
