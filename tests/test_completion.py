@@ -145,6 +145,32 @@ class WhatTabOffersTests(CompletionTest):
         self.assertEqual(self.tab("slack-export --group Research --out R"),
                          ["Reports/"])
 
+    def test_out_completes_folders_under_the_home_folder(self):
+        """~ is expanded to look, and kept as typed in what is offered."""
+        for folder in ("Desktop/Notes", "Documents", ".hidden"):
+            (self.home / folder).mkdir(parents=True)
+        (self.home / "Draft.txt").write_text("")
+        self.assertEqual(self.tab("slack-export C0000000001 --out ~/Desk"),
+                         ["~/Desktop/"])
+        self.assertEqual(self.tab("slack-export --group Research --out ~/D"),
+                         ["~/Desktop/", "~/Documents/"])
+        self.assertEqual(self.tab("slack-export C0000000001 --out ~/Desktop/"),
+                         ["~/Desktop/Notes/"])
+        self.assertEqual(self.tab("slack-export C0000000001 --out ~"), ["~/"])
+
+    def test_out_offers_hidden_folders_only_once_a_dot_is_typed(self):
+        (self.home / ".hidden").mkdir()
+        self.assertNotIn("~/.hidden/",
+                         self.tab("slack-export C0000000001 --out ~/"))
+        self.assertIn("~/.hidden/",
+                      self.tab("slack-export C0000000001 --out ~/."))
+
+    def test_out_completes_a_full_path(self):
+        (self.home / "Desktop").mkdir()
+        self.assertEqual(
+            self.tab(f"slack-export C0000000001 --out {self.home}/Desk"),
+            [f"{self.home}/Desktop/"])
+
     def test_no_index_still_completes_commands(self):
         self.index.unlink()
         self.assertEqual(self.tab("slack-export "), ["list", "save", "group"])

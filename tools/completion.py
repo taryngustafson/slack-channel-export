@@ -25,7 +25,6 @@ import os
 import re
 
 import argcomplete
-from argcomplete.completers import DirectoriesCompleter
 
 # The parser builder for each command word, by name in export_conversation.
 COMMAND_PARSERS = {"list": "_list_parser", "save": "_save_parser",
@@ -75,7 +74,7 @@ def _attach_completers(parser, tool, removing: bool) -> None:
         "name": index.ids,          # an export's name slot also takes the next ID
         "group": index.group_names,
         "groups": index.group_names,
-        "out": DirectoriesCompleter(),
+        "out": _folders,
     }
     if parser.prog == "slack-export group":
         completers.update(name=index.group_names,
@@ -92,6 +91,31 @@ def _attach_completers(parser, tool, removing: bool) -> None:
 def _nothing(**_) -> list:
     """For free text: offer nothing, rather than argcomplete's default of files."""
     return []
+
+
+def _folders(prefix, **_) -> list:
+    """The folders --out can take, offered as `cd` offers them.
+
+    argcomplete's own DirectoriesCompleter never expands ~ (as of 3.7.0), so
+    `--out ~/Desk` looked for a folder literally named ~ and offered nothing.
+    Here ~ (or ~user) is expanded only to look; what is offered keeps the ~ as
+    typed, so the line still reads ~/Desktop/. Hidden folders are offered only
+    once a dot is typed, as in the shell.
+    """
+    if prefix.startswith("~") and "/" not in prefix:
+        # Just ~ (or ~user): finish it with the slash, if it names a home folder.
+        home = os.path.expanduser(prefix)
+        return [prefix + "/"] if home != prefix and os.path.isdir(home) else []
+    typed_dir, partial = os.path.split(prefix)
+    look_in = os.path.expanduser(typed_dir) if typed_dir else "."
+    try:
+        names = sorted(os.listdir(look_in))
+    except OSError:
+        return []
+    return [os.path.join(typed_dir, name) + "/" for name in names
+            if name.startswith(partial)
+            and (partial.startswith(".") or not name.startswith("."))
+            and os.path.isdir(os.path.join(look_in, name))]
 
 
 class _Index:
