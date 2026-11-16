@@ -48,6 +48,7 @@ Slack and added to it first:
 
     slack-export group Research                     # make an empty group
     slack-export group Research C0123456789 D0123456789   # add conversations to it
+    slack-export group Research Alex                # ...or by saved nickname
     slack-export group Research --remove C0123456789      # take one out again
     slack-export group Research --delete            # delete the group itself
     slack-export group Research --list              # the conversations in it

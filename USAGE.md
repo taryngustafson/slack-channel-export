@@ -987,7 +987,9 @@ You typed a nickname with spaces without quotes, and its first word is also a ni
 
 ### `is the nickname of more than one conversation`
 
-`save` never allows this, so the conversation index was probably edited by hand. Export by ID, or give one of them a different nickname with `slack-export save ID NEW-NICKNAME`.
+When exporting: `save` never gives one nickname to two conversations in the same Slack workspace, so the conversation index was probably edited by hand. Export by ID, or give one of them a different nickname with `slack-export save ID NEW-NICKNAME`.
+
+With `group`: the same nickname can be saved in two Slack workspaces, and `group` looks in all of them, so it cannot tell which one you mean. Nothing was changed. Use the ID the message lists instead.
 
 ### `can't be a nickname`
 
