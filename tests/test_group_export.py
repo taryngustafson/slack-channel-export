@@ -292,6 +292,21 @@ class RefusedGroupTests(GroupTest):
         self.assert_refused(("--group", "research"),
                             "No group named 'research'.\nDid you mean 'Research'?")
 
+    def test_help_with_or_without_a_group_name(self):
+        """`--group -h` used to stop with "expected one argument": argparse took
+        -h for an option and found --group without its name."""
+        self.make_group("Research", ALPHA)
+        before = self.files()
+        for argv in (("--group", "-h"), ("--group", "--help"),
+                     ("--group", "Research", "-h")):
+            code, out, err = self.run_export(*argv)
+            self.assertEqual(code, 0, err)
+            self.assertIn("slack-export --group GROUP [options]", out)
+            self.assertIn("Name of the group to export.", out)
+            self.assertEqual(err, "")
+        self.assertEqual(self.slack.calls, [], "Slack must not be contacted")
+        self.assertEqual(self.files(), before, "nothing written or changed")
+
     def test_an_empty_group_does_nothing_and_succeeds(self):
         store = {"version": 1, "workspaces": {}, "groups": {"Research": []}}
         self.index.parent.mkdir(parents=True)

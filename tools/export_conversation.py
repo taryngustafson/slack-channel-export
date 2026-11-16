@@ -2321,22 +2321,60 @@ def _group_jobs(conversation_id: str, places: list) -> list:
     return list(jobs.values())
 
 
+GROUP_EXPORT_USAGE = """\
+usage:
+  slack-export --group GROUP [options]
+"""
+
+GROUP_EXPORT_HELP = GROUP_EXPORT_USAGE + """
+Export all conversations in a saved group.
+
+Updates existing exports in their original locations, or creates new
+ID-named files for conversations that haven't been exported before.
+Use --out to export to a specific directory instead.
+
+EXAMPLES
+  slack-export --group Research
+      Export or update every conversation in the Research group.
+
+  slack-export --group "Project Planning"
+      Export a group whose name contains spaces.
+
+  slack-export --group Research --out ~/Desktop
+      Export the group to a specific directory.
+
+  slack-export --group Research --no-threads
+      Export top-level messages without thread replies.
+
+OPTIONS
+  -h, --help
+      Show this help message and exit.
+
+  --group GROUP
+      Name of the group to export.
+
+  --out DIR
+      Update or create exports in the specified directory.
+
+  --no-threads
+      Skip thread replies.
+
+For more details, see USAGE.md.
+"""
+
+
 def _group_export_parser() -> argparse.ArgumentParser:
     """The parser for `slack-export --group NAME`: built here, apart from running the
     command, so that tab completion can use it too."""
-    parser = argparse.ArgumentParser(
-        prog="slack-export",
-        usage="slack-export --group name [--out DIR] [--no-threads]",
-        description="Export every conversation in a group, one after another. "
-                    "Each copy already exported is topped up where it is; a "
-                    "conversation with no copy left gets a new one named by its "
-                    "ID. Put a name with spaces in quotes.")
-    parser.add_argument("--group", action="append", required=True, metavar="name",
-                        help="the group to export")
+    parser = _WrittenHelpParser(prog="slack-export",
+                                written_usage=GROUP_EXPORT_USAGE,
+                                written_help=GROUP_EXPORT_HELP)
+    parser.add_argument("--group", action="append", required=True, metavar="GROUP",
+                        help="Name of the group to export.")
     parser.add_argument("--out", metavar="DIR",
-                        help="only update copies in DIR, adding new ones there")
+                        help="Update or create exports in the specified directory.")
     parser.add_argument("--no-threads", action="store_true",
-                        help="top-level messages only")
+                        help="Skip thread replies.")
     # Accepted only to be refused with a reason, rather than argparse's own error.
     parser.add_argument("--copy", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--no-clipboard", action="store_true", help=argparse.SUPPRESS)
@@ -2356,6 +2394,12 @@ def group_export(argv) -> None:
     reported and skipped, and the rest carry on; the exit code is 1 if any failed.
     """
     parser = _group_export_parser()
+    if "-h" in argv or "--help" in argv:
+        # Before parsing: in `--group -h`, argparse takes -h for an option, finds
+        # --group without its name and stops with an error instead of the help.
+        # No group can be named -h, since `slack-export group -h` is help too.
+        parser.print_help()
+        sys.exit(0)
     args = parser.parse_intermixed_args(argv)
 
     if len(args.group) > 1:

@@ -58,8 +58,8 @@ def complete(tool) -> None:
         parser = tool._export_parser()
         # --group is its own parser (group_export), so the export parser does
         # not know it; added here so that `--gr` completes to it.
-        parser.add_argument("--group", metavar="name",
-                            help="export every conversation in a group")
+        parser.add_argument("--group", metavar="GROUP",
+                            help="Export every conversation in a saved group.")
     _attach_completers(parser, tool, removing)
     argcomplete.autocomplete(parser, always_complete_options=False,
                              default_completer=_nothing)
