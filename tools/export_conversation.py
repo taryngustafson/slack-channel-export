@@ -1305,7 +1305,7 @@ EXAMPLES
 
 ARGUMENTS
   ID
-      Slack conversation ID (C... or D...) or a Slack conversation link.
+      Slack conversation ID (C..., D... or G...) or a Slack conversation link.
 
   nickname
       Optional, case-sensitive nickname unique to the conversation.
@@ -1324,7 +1324,7 @@ def _save_parser() -> argparse.ArgumentParser:
     parser = _WrittenHelpParser(prog="slack-export save",
                                 written_usage=SAVE_USAGE, written_help=SAVE_HELP)
     parser.add_argument("conversation_id", metavar="ID",
-                        help="Slack conversation ID (C... or D...) or a Slack "
+                        help="Slack conversation ID (C..., D... or G...) or a Slack "
                              "conversation link.")
     # Every leftover word is the nickname, so quotes are optional, as for an export.
     parser.add_argument("nickname", nargs="*",
@@ -1675,8 +1675,8 @@ ARGUMENTS
       Group name (case-sensitive; quote names containing spaces).
 
   ID
-      Slack conversation ID (C... or D...), a Slack conversation link, or a
-      saved nickname (quote nicknames containing spaces).
+      Slack conversation ID (C..., D... or G...), a Slack conversation link,
+      or a saved nickname (quote nicknames containing spaces).
 
 OPTIONS
   -h, --help
@@ -1718,7 +1718,7 @@ def _group_parser() -> argparse.ArgumentParser:
                         help="Group name (case-sensitive; quote names containing "
                              "spaces).")
     parser.add_argument("conversations", nargs="*", metavar="ID",
-                        help="Slack conversation ID (C... or D...), a Slack "
+                        help="Slack conversation ID (C..., D... or G...), a Slack "
                              "conversation link, or a saved nickname (quote "
                              "nicknames containing spaces).")
     parser.add_argument("--remove", action="store_true",
@@ -2543,7 +2543,7 @@ usage:
   slack-export --group GROUP [options]
   slack-export save ID [nickname ...]
   slack-export list [search ...] [options]
-  slack-export list --groups [GROUP] [--search WORD ...]
+  slack-export list --groups [GROUP ...] [--search WORD ...]
   slack-export group GROUP [ID ...]
   slack-export group GROUP --remove ID [ID ...]
   slack-export group GROUP --delete
@@ -2638,7 +2638,7 @@ OPTIONS
       Reverse the selected sort order.
 
   --search WORD [WORD ...]
-      Filter conversations within a group listing.
+      Filter conversations by search terms.
 
 FILES AND UPDATES
   Markdown (.md) and text (.txt) files are saved to exports/ by default.
