@@ -91,7 +91,7 @@ Once that is done, see **[USAGE.md](USAGE.md)** for the full usage guide.
 slack-export C0123456789
 ```
 
-Channel IDs normally start with `C`. DM IDs start with `D`.
+Channel IDs normally start with `C`, though some older private channels start with `G`. DM IDs start with `D`.
 
 You can also paste:
 
@@ -150,6 +150,10 @@ Options can be combined with a name, and can go anywhere after `slack-export`:
 ```sh
 slack-export C0123456789 Project Planning --copy
 ```
+
+### Help
+
+Every command has its own help page: `slack-export -h`, `slack-export list -h`, `slack-export save -h`, `slack-export group -h` and `slack-export --group -h`.
 
 ### Find a conversation again
 
@@ -291,7 +295,7 @@ The exporter checks the existing raw archive, downloads what has appeared since 
 
 With `--copy`, only the newly fetched messages are copied.
 
-To bring every conversation in a group up to date, run `slack-export --group NAME` again.
+To bring every conversation in a group up to date, run `slack-export --group GROUP` again.
 
 If an export is interrupted partway, run the same command again. It finishes the update without adding anything twice.
 

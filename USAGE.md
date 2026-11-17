@@ -30,6 +30,8 @@ It will look something like:
 C0123456789
 ```
 
+Some older private channels have IDs that start with `G` instead.
+
 #### DM ID
 
 For a DM, open it in Slack in your browser and look at the URL:
@@ -394,7 +396,7 @@ This sorts by what the column shows, so an export name in `[brackets]` is sorted
 
 On its own, `--reverse` gives the default `name` order from Z to A. `--sort-by name` asks for the default order by Slack name; leaving `--sort-by` off does the same.
 
-Both flags also work with a search, with `list --groups <group>`, and with `group <group> --list`.
+Both flags also work with a search, with `list --groups GROUP`, and with `group GROUP --list`.
 
 `list` is completely local. It reads the saved file only and does not contact Slack or read your Slack token, so it also works offline.
 
@@ -410,7 +412,7 @@ The nickname column shows:
 
 The Slack channel name column shows the name Slack gives the conversation. DMs do not have Slack channel names, so a DM shows `(DM)`. A group DM technically has an internal Slack name beginning with `mpdm-`, but that is not very useful to a person, so it also shows as `(DM)` unless someone has given the group DM a name. A normal Slack channel whose actual name starts with `mpdm-` is still shown normally.
 
-The last-exported column shows how long ago the conversation was most recently exported, under any file name. An export counts only when its archive and every readable file it set out to update were brought up to date. If a file was skipped because the exporter did not recognize it, the column keeps its previous time, and the export's summary says so. For a conversation with copies in more than one folder, the column says nothing about copies that export did not touch: after `--group NAME --out DIR`, for example, copies outside `DIR` may be further behind. The wording runs: `just now`, then minutes, hours, days (up to 13), weeks (up to 8), months, and years. A `-` means it has never been exported, only saved or added to a group.
+The last-exported column shows how long ago the conversation was most recently exported, under any file name. An export counts only when its archive and every readable file it set out to update were brought up to date. If a file was skipped because the exporter did not recognize it, the column keeps its previous time, and the export's summary says so. For a conversation with copies in more than one folder, the column says nothing about copies that export did not touch: after `--group GROUP --out DIR`, for example, copies outside `DIR` may be further behind. The wording runs: `just now`, then minutes, hours, days (up to 13), weeks (up to 8), months, and years. A `-` means it has never been exported, only saved or added to a group.
 
 This is when *you* last ran an export, not whether Slack has new messages since. A quiet channel exported a month ago shows `1 month ago` even if nothing has been posted. The exact date and time of each export is kept in the conversation index; only the wording here is rounded.
 
@@ -890,8 +892,8 @@ Press Tab partway through a word to finish it, as you would with `cd`. When seve
 | a `-` | the options that command takes, such as `--group` or `--out` |
 | `--group`, `list --groups`, `group` | your group names |
 | `save`, or an ID or nickname to export | the IDs in your conversation index |
-| `group NAME` | the IDs and nicknames in your conversation index that are not in that group yet |
-| `group NAME --remove` | the IDs and nicknames in that group |
+| `group GROUP` | the IDs and nicknames in your conversation index that are not in that group yet |
+| `group GROUP --remove` | the IDs and nicknames in that group |
 | `--sort-by` | `name`, `id`, `nickname`, `export` |
 | `--out` | folders |
 
@@ -919,7 +921,7 @@ To turn tab completion off, delete that line from `~/.zshrc`, or run `sh install
 * **Installed before tab completion existed?** Run `sh install.sh` again from the project folder. It installs what tab completion needs and adds the line.
 * **The installer said `skipped: argcomplete is not installed`.** Installing the Python packages failed, usually for lack of an internet connection. Run `sh install.sh` again once you are online.
 * **An ID is not offered.** Only conversations in your conversation index are offered. Export or save the conversation once, and its ID will be offered from then on.
-* **A nickname is not offered.** Matching is case-sensitive, so start typing it with the same capitals you saved it with. Nicknames are offered only as the first word after `slack-export`, and after `group NAME`.
+* **A nickname is not offered.** Matching is case-sensitive, so start typing it with the same capitals you saved it with. Nicknames are offered only as the first word after `slack-export`, and after `group GROUP`.
 
 `slack-export` itself works the same with or without tab completion.
 
